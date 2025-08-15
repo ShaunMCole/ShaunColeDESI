@@ -1117,7 +1117,7 @@ def compute_veff(dat,regions):
     #dat.add_column(Column(name='veff', data=veff))
     #dat.add_column(Column(name='veff_max', data=veff_max))
 
-    nsamp=64.0 #over sampling factor
+    nsamp=4.0 #over sampling factor
     nbins=2000 #number of volume bins
     nzbins=20 #number of redshift bins (just for plots)
 
@@ -1288,7 +1288,7 @@ def compute_veff_logspacing(dat,regions):
     #dat.add_column(Column(name='veff', data=veff))
     #dat.add_column(Column(name='veff_max', data=veff_max))
 
-    nsamp=64.0 #over sampling factor
+    nsamp=4.0 #over sampling factor
     nbins=2000 #number of volume bins
     nzbins=20 #number of redshift bins (just for plots)
     logvmin=np.log10(1.0e-08) # For the logarithmic binning scheme this is the minimum of the range of Log10(Volume). Volume in (Gpc/h)^3
@@ -1637,7 +1637,7 @@ def plot_sizes(dat,regions):
     bins = np.arange(0, 40.0, 1.0)
     bin_cen=(bins[:-1] + bins[1:]) / 2.0
     for reg in regions:
-        Sel=ca.selection(reg) # define selection parameters for this region
+        Sel=selection(reg) # define selection parameters for this region
         mask=(dat['reg']==reg)#mask to select objects in specified region        
         count,binz=np.histogram(dat[mask]['SHAPE_R'], bins=bins,  density=True)
         plt.plot(bin_cen, count, label=reg, linewidth=1.0, color=Sel['col'], linestyle=Sel['style'])  
@@ -1657,7 +1657,7 @@ def plot_depths(dat,regions):
     bins = np.arange(21, 27.0, 0.01)
     bin_cen=(bins[:-1] + bins[1:]) / 2.0
     for reg in regions:
-        Sel=ca.selection(reg) # define selection parameters for this region
+        Sel=selection(reg) # define selection parameters for this region
         mask=(dat['reg']==reg)#mask to select objects in specified region        
         count,binz=np.histogram(psfmagdepth[mask], bins=bins,  density=True)
         plt.plot(bin_cen, count, label='PSF '+reg, linewidth=1.0, color=Sel['col'], linestyle=Sel['style'])  
