@@ -18,7 +18,7 @@ cosmo = FlatLambdaCDM(H0=100, Om0=0.313, Tcmb0=2.725)   #Standard Planck Cosmolo
 #Define Sample selection cuts and their display styles
 #and other "global" variables so they can be defined in any routine
 def selection(reg):
-    f_ran=1.0   #Random down smapling factor
+    f_ran=0.02  #Random down smapling factor
     Qevol=0.78 #0.78 #Assumed luminosity evolution parameter
     area_N_Y1=2393.4228/(4*np.pi*(180.0/np.pi)**2)
     area_S_Y1=5358.2728/(4*np.pi*(180.0/np.pi)**2)
@@ -120,6 +120,46 @@ def load_catalogue(fpath):
 
     return dat
 
+################################################################################################################
+
+# Flag each galaxy by which redshift bin it is in, whetherit forms part of the corresponding volumne limited sample
+# and record for it the volume of that redshift bin
+# i.e. defines dat['izbin'], dat['invollim'] and dat['vollim']
+def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
+    # record which bin each galaxy falls in
+    dat['izbin']= np.searchsorted(zbin_edges,dat['Z'],side='right')-1
+    # For each galaxy flag as invollim if it meets the selection cuts througout the volume
+    dat['invollim']= (dat['zmax']>=zbin_edges[dat['izbin']+1]) & (dat['zmin']<=zbin_edges[dat['izbin']])
+    # For each galaxy compute the volume of the volume limited sample it is in.
+    for reg in regions:
+        Sel=selection(reg)
+        dat['vollim']=Sel['area']*(4.0*np.pi/3.0)*( (cosmo.comoving_distance(zbin_edges[dat['izbin']+1]).value)**3 - (cosmo.comoving_distance(zbin_edges[dat['izbin']]).value)**3 )
+
+    # plot a random sample colour coded by bin
+    rmask = (np.random.rand(dat['Z'].size)<plotfrac)
+    vlrmask=rmask & dat['invollim']
+    vlmask= dat['invollim']
+    plt.scatter(dat['Z'][rmask],dat['ABSMAG_RP1'][rmask],marker=',',lw=0,s=1,c=10-dat['izbin'][rmask],cmap='inferno')
+    plt.scatter(dat['Z'][vlrmask],dat['ABSMAG_RP1'][vlrmask],marker=',',lw=0,s=1,c=dat['izbin'][vlrmask],cmap='jet')
+    plt.xlim(0.0,0.6)
+    plt.xlabel('$z$')
+    plt.ylabel('$M_r$')
+    plt.show()
+    # plot full volume limited samples
+    #plt.scatter(dat['Z'][mask],dat['ABSMAG_RP1'][mask],marker=',',lw=0,s=1,c=10-izbin[mask],cmap='jet')
+    plt.scatter(dat['Z'][vlmask],dat['ABSMAG_RP1'][vlmask],marker=',',lw=0,s=1,c=dat['izbin'][vlmask],cmap='jet')
+    plt.xlim(0.0,0.6)
+    plt.xlabel('$z$')
+    plt.ylabel('$M_r$')
+    plt.show()
+    # plot histogram of the number of objects in each bin overall and in volume limited subset
+    plt.hist(dat['Z'],bins=zbin_edges,label='All')
+    plt.hist(dat['Z'][vlmask],bins=zbin_edges,label='Volume limited')
+    plt.xlim(0.0,0.6)
+    plt.xlabel('$z$')
+    plt.legend()
+    plt.show()
+    return
 ########################################################################################################################
 
 def solve_jackknife_nonsq(data, ndiv_ra=4, ndiv_dec=5, offset=275):
@@ -760,7 +800,7 @@ def cone_plot(dat,regions):
 ######################################################################################################################
 #Plot 1/vmax Luminosity function
 #with different plotting options
-def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot=False, binwidth=0.25, ratio=False, Veff=False):
+def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot=False, binwidth=0.25, ratio=False, Veff=False, Vollim=False):
     
     eps=1.0e-10 #used to avoid divide by zero
     bins = np.arange(-24.0, -11.1, binwidth)
@@ -777,8 +817,12 @@ def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot
             print('Using Veff_max rather than Vmax in LF estimate.')
             weight[mask]=dat['WEIGHT'][mask]/(binwidth*dat['veff_max'][mask]*Sel['f_ran'])
         else:
-            weight[mask]=dat['WEIGHT'][mask]/(binwidth*dat['vmax'][mask]*Sel['f_ran'])
-        phi,binr=np.histogram(dat[bandmag][mask], bins=bins,  weights=weight[mask])
+            if (Vollim==0): #not a volume limited sample
+                weight[mask]=dat['WEIGHT'][mask]/(binwidth*dat['vmax'][mask]*Sel['f_ran'])
+                phi,binr=np.histogram(dat[bandmag][mask], bins=bins,  weights=weight[mask])
+            else: #if this sample is volume limited with volume Vollim
+                weight[mask]=dat['WEIGHT'][mask]/(binwidth*dat['vollim'][mask]*Sel['f_ran'])
+                phi,binr=np.histogram(dat[bandmag][mask], bins=bins,  weights=weight[mask])
         
         log_phi=np.log10(np.maximum(phi,eps))
 
@@ -1128,7 +1172,7 @@ def compute_veff(dat,regions):
       Sel=selection(reg)
       #minimum vmin for the whole selected sample. We just consider volume above this vmin and work in bins of that covering 0 to vmax-vmin
       vmin_sample=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(Sel['zmin']).value)**3 
-      vmax_sample=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(Sel['zmax']).value)**3 - vmin_sample
+      
       vbins=np.linspace(0.0,vmax_sample,nbins) # volume bin edges
       vbin_width=vbins[1]-vbins[0] #bin width
       print('vbin_width:',vbin_width*1.0e-09,vmax_sample*1.0e-09/(nbins-1),'(Gpc/h)^3')  
