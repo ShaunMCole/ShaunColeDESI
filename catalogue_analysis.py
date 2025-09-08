@@ -139,6 +139,9 @@ def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
     rmask = (np.random.rand(dat['Z'].size)<plotfrac)
     vlrmask=rmask & dat['invollim']
     vlmask= dat['invollim']
+    #loop over the redshift bins
+    for jzbin in range(0,zbin_edges.size-1):  
+        print('Number in volume limited sample:',jzbin,' with limits:',zbin_edges[jzbin],zbin_edges[jzbin+1],((dat['izbin']==jzbin) & vlmask).sum())
     plt.scatter(dat['Z'][rmask],dat['ABSMAG_RP1'][rmask],marker=',',lw=0,s=1,c=10-dat['izbin'][rmask],cmap='inferno')
     plt.scatter(dat['Z'][vlrmask],dat['ABSMAG_RP1'][vlrmask],marker=',',lw=0,s=1,c=dat['izbin'][vlrmask],cmap='jet')
     plt.xlim(0.0,0.6)
@@ -176,8 +179,8 @@ def solve_jackknife_nonsq(data, ndiv_ra=4, ndiv_dec=5, offset=275):
 
     percentiles_ra   = np.arange(dpercentile_ra, 100. + dpercentile_ra, dpercentile_ra)
     percentiles_dec   = np.arange(dpercentile_dec, 100. + dpercentile_dec, dpercentile_dec)
-    #print(percentiles_ra)
-    #print(percentiles_dec)
+    print('RA percentiles:',percentiles_ra)
+    print('dec percentiles:', percentiles_dec)
     
     
     # Set up a astropy table to store the RA and Dec values of the boundaries initialised to zero
@@ -195,6 +198,8 @@ def solve_jackknife_nonsq(data, ndiv_ra=4, ndiv_dec=5, offset=275):
         #Find the next RA band
         # Given a vector V of length N, the q-th percentile of V is the q-th ranked value in a sorted copy of V. 
         # https://docs.scipy.org/doc/numpy-1.9.2/reference/generated/numpy.percentile.html
+        ra_per=np.minimum(99.999999,ra_per)  #avoid >100 by rounding error
+        print('ra_per',ra_per,ra_per - dpercentile_ra)
         rahigh    = np.percentile(RA_JK, ra_per)
         ralow     = np.percentile(RA_JK, ra_per - dpercentile_ra)
 
@@ -204,8 +209,10 @@ def solve_jackknife_nonsq(data, ndiv_ra=4, ndiv_dec=5, offset=275):
         for dec_per in percentiles_dec:
             #define mask to select data in this RA band
             isin    = (RA_JK >= ralow) & (RA_JK <= rahigh)
+            dec_per=np.minimum(99.999999,dec_per)  #avoid >100 by rounding error
 
             # find the next dec band
+            print('dec_per',dec_per,dec_per - dpercentile_dec)
             dechigh = np.percentile(data[f'DEC'][isin], dec_per)
             declow  = np.percentile(data[f'DEC'][isin], dec_per - dpercentile_dec)
 
@@ -754,7 +761,7 @@ def sky_plot(dat,regions):
 def sky_plot_jack(dat):
     colour = ['blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'black', 'gray', 'purple', 'orange', 'brown', 'pink', 'lime', 'teal', 'lavender', \
     'turquoise', 'gold', 'darkblue', 'darkgreen', 'darkred', 'darkcyan', 'darkmagenta', 'forestgreen', 'lightblue', 'lightgreen', 'lightcoral',  'lightpink', 'lightskyblue', 'lightgray']
-    
+    ncol = len(colour)
 
     # All-sky scatter plot with galactic plane and ecliptic marked
     mask=(dat['ijack']!=-999) #exclude those set to -999 which means unassigned
@@ -762,7 +769,7 @@ def sky_plot_jack(dat):
     ax= init_sky()
     for ijack in range(0, njack ):  
         mask = (dat['ijack']==ijack)
-        p = ax.scatter(ax.projection_ra(dat['RA'][mask]),ax.projection_dec(dat['DEC'][mask]),color=colour[ijack],s=0.25, marker='.', linewidths=0)  
+        p = ax.scatter(ax.projection_ra(dat['RA'][mask]),ax.projection_dec(dat['DEC'][mask]),color=colour[(ijack%ncol)],s=0.25, marker='.', linewidths=0)  
     # PLot the problematic points that have not been assigned to a jackkife region
     mask=(dat['ijack']==-999)
     p = ax.scatter(ax.projection_ra(dat['RA'][mask]),ax.projection_dec(dat['DEC'][mask]),color='black',s=20.0, marker='X', linewidths=0)  
