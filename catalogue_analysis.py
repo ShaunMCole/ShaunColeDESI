@@ -18,7 +18,7 @@ cosmo = FlatLambdaCDM(H0=100, Om0=0.313, Tcmb0=2.725)   #Standard Planck Cosmolo
 #Define Sample selection cuts and their display styles
 #and other "global" variables so they can be defined in any routine
 def selection(reg):
-    f_ran=0.02  #Random down smapling factor
+    f_ran=1.0  #Random down smapling factor
     Qevol=0.78 #0.78 #Assumed luminosity evolution parameter
     area_N_Y1=2393.4228/(4*np.pi*(180.0/np.pi)**2)
     area_S_Y1=5358.2728/(4*np.pi*(180.0/np.pi)**2)
@@ -130,10 +130,11 @@ def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
     dat['izbin']= np.searchsorted(zbin_edges,dat['Z'],side='right')-1
     # For each galaxy flag as invollim if it meets the selection cuts througout the volume
     dat['invollim']= (dat['zmax']>=zbin_edges[dat['izbin']+1]) & (dat['zmin']<=zbin_edges[dat['izbin']])
-    # For each galaxy compute the volume of the volume limited sample it is in.
+    # For each galaxy compute the volume of the volume limited sample it is in (N and S have to be done separately as areas differ)
     for reg in regions:
         Sel=selection(reg)
-        dat['vollim']=Sel['area']*(4.0*np.pi/3.0)*( (cosmo.comoving_distance(zbin_edges[dat['izbin']+1]).value)**3 - (cosmo.comoving_distance(zbin_edges[dat['izbin']]).value)**3 )
+        regmask=(dat['reg']==reg)
+        dat['vollim'][regmask]=Sel['area']*(4.0*np.pi/3.0)*( (cosmo.comoving_distance(zbin_edges[dat['izbin'][regmask]+1]).value)**3 - (cosmo.comoving_distance(zbin_edges[dat['izbin'][regmask]]).value)**3 )
 
     # plot a random sample colour coded by bin
     rmask = (np.random.rand(dat['Z'].size)<plotfrac)
@@ -179,8 +180,8 @@ def solve_jackknife_nonsq(data, ndiv_ra=4, ndiv_dec=5, offset=275):
 
     percentiles_ra   = np.arange(dpercentile_ra, 100. + dpercentile_ra, dpercentile_ra)
     percentiles_dec   = np.arange(dpercentile_dec, 100. + dpercentile_dec, dpercentile_dec)
-    print('RA percentiles:',percentiles_ra)
-    print('dec percentiles:', percentiles_dec)
+    #print('RA percentiles:',percentiles_ra)
+    #print('dec percentiles:', percentiles_dec)
     
     
     # Set up a astropy table to store the RA and Dec values of the boundaries initialised to zero
@@ -199,7 +200,7 @@ def solve_jackknife_nonsq(data, ndiv_ra=4, ndiv_dec=5, offset=275):
         # Given a vector V of length N, the q-th percentile of V is the q-th ranked value in a sorted copy of V. 
         # https://docs.scipy.org/doc/numpy-1.9.2/reference/generated/numpy.percentile.html
         ra_per=np.minimum(99.999999,ra_per)  #avoid >100 by rounding error
-        print('ra_per',ra_per,ra_per - dpercentile_ra)
+        #print('ra_per',ra_per,ra_per - dpercentile_ra)
         rahigh    = np.percentile(RA_JK, ra_per)
         ralow     = np.percentile(RA_JK, ra_per - dpercentile_ra)
 
@@ -212,7 +213,7 @@ def solve_jackknife_nonsq(data, ndiv_ra=4, ndiv_dec=5, offset=275):
             dec_per=np.minimum(99.999999,dec_per)  #avoid >100 by rounding error
 
             # find the next dec band
-            print('dec_per',dec_per,dec_per - dpercentile_dec)
+            #print('dec_per',dec_per,dec_per - dpercentile_dec)
             dechigh = np.percentile(data[f'DEC'][isin], dec_per)
             declow  = np.percentile(data[f'DEC'][isin], dec_per - dpercentile_dec)
 
@@ -237,17 +238,24 @@ def solve_jackknife_nonsq(data, ndiv_ra=4, ndiv_dec=5, offset=275):
     return  njack, limits
 ###########################################################################################################################
 #  Set jackknife indices for the objects in data[regmask]
-def set_jackknife(dat, regmask, limits, noffset, njack):
-  
+def set_jackknife(dat, regmask, limits, noffset, njack, verbose=False):
+
+  # initialise min and max assigned per region   
+  min_assigned=100000000
+  max_assigned=0  
+    
   for ijack in range(0, njack ):  
          # mask to select data in the ijack'th jackknife region
          if (limits['ralow'][ijack]<limits['rahigh'][ijack]): #if window does not straddle the 0/360 deg boundary as a result of applying the offset then the mask is simple
             injack = regmask & (dat['RA']>= limits['ralow'][ijack]) & (dat['RA']<= limits['rahigh'][ijack]) & (dat['DEC']>= limits['declow'][ijack]) & (dat['DEC']<= limits['dechigh'][ijack])
          else:  # otherwise we have to use this more complicated version
               injack = regmask & (((dat['RA']>= 0.0 ) & (dat['RA']<= limits['rahigh'][ijack])) | ((dat['RA']>=  limits['ralow'][ijack]) & (dat['RA']<=360.0))) & (dat['DEC']>= limits['declow'][ijack]) & (dat['DEC']<= limits['dechigh'][ijack])
-         print('assigning',np.count_nonzero(injack),'objects to jackknife region',ijack+noffset)
+         min_assigned=np.minimum(min_assigned,np.count_nonzero(injack))  
+         max_assigned=np.maximum(max_assigned,np.count_nonzero(injack))   
+         if (verbose): print('assigning',np.count_nonzero(injack),'objects to jackknife region',ijack+noffset)
          dat['ijack'][injack]=ijack+noffset
-
+  print('The number of objects assigned in each region falls in the range:',min_assigned,' to ',max_assigned)
+      
   #   The above ought to assign all objects to a jackknife region but rounding errors mean some escape. 
   #  The following code assigns any escapees to the nearest jackknife region by expanding each region by an amount eps.  
   if ( np.count_nonzero(dat['ijack'][regmask]==-999) ):
