@@ -18,7 +18,7 @@ cosmo = FlatLambdaCDM(H0=100, Om0=0.313, Tcmb0=2.725)   #Standard Planck Cosmolo
 #Define Sample selection cuts and their display styles
 #and other "global" variables so they can be defined in any routine
 def selection(reg):
-    f_ran=1.0  #Random down smapling factor
+    f_ran=0.01 #Random down sampling factor
     Qevol=0.78 #0.78 #Assumed luminosity evolution parameter
     area_N_Y1=2393.4228/(4*np.pi*(180.0/np.pi)**2)
     area_S_Y1=5358.2728/(4*np.pi*(180.0/np.pi)**2)
@@ -352,7 +352,9 @@ def compute_zmax_vmax(dat,regions):
         #set up k-corrections for region
         kcorr_r  = DESI_KCorrection(band='R', file='jmext', photsys=reg) #set k-correction for region
         regmask=(dat['reg']==reg)#mask to select objects in specified region
-        mask = regmask & (dat['rmag']<Sel['faint']) # in region and brighter than faint cut
+        mask = regmask & (dat['rmag']>Sel['bright']) & (dat['rmag']<Sel['faint']) # in region and between faint and bright apparent magnitude cuts
+        print('Sample size in this region and between faint and bright apparent magnitude limits:',mask.sum())
+        
         magdiff_target=Sel['faint']-dat['ABSMAG_RP1']
         #The zmax we want has to be between the following two values
         zguess0=np.copy(dat['Z'])
@@ -363,7 +365,6 @@ def compute_zmax_vmax(dat,regions):
         print('zmax values found')
 
         magdiff_target=Sel['bright']-dat['ABSMAG_RP1']
-        mask = regmask & (dat['rmag']>Sel['bright']) # in region and fainter than bright cut
         #The zmin we want has to be between the following two values
         zguess0=np.zeros(dat['Z'].size)+Sel['zmin'] # "sample_zmin"
         zguess1=np.copy(dat['Z'])
@@ -372,6 +373,7 @@ def compute_zmax_vmax(dat,regions):
         ztol=0.00001
         zmin[mask]=root_itp2(magdiff,dat['REST_GMR_0P1'][mask],Sel['Qevol'],magdiff_target[mask],ztol,zguess1[mask],zguess0[mask]) 
         print('zmin values found')
+        
         zcheck=  (zmin[mask]-Sel['zmin'])
         if (np.min(zcheck)<0): print('ERROR: object with zmin<Sel[zmin]')
 

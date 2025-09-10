@@ -580,8 +580,8 @@ class DESI_KCorrection(object):
         return self.__Y_interpolator(colour_clipped)
 
 
-
-    def k(self, redshift, restframe_colour, median=False):
+    # the following is the function that returns the k-correction 
+    def k(self, redshift, restframe_colour, median=False, Nokcorrection=True):
         """
         Polynomial fit to the DESI
         K-correction for z<0.6
@@ -593,16 +593,21 @@ class DESI_KCorrection(object):
         Returns:
             array of K-corrections
         """
-        K   = np.zeros(len(redshift))
-        idx = redshift <= 0.6
-        
-        if median:
+         
+        if median: #replaces all restframe colours with median values and then uses the single corresponding k-correction
             restframe_colour = np.copy(restframe_colour)
             
             # Fig. 13 of https://arxiv.org/pdf/1701.06581.pdf            
             restframe_colour = 0.603 * np.ones_like(restframe_colour)
+            
+        K   = np.zeros(len(redshift)) #placeholder for k-correction that are going to be returned
 
-        K[idx] = self.__A(restframe_colour[idx])*(redshift[idx]-self.z0)**6 + \
+        if Nokcorrection:
+          K=-2.5*np.log10(1.0+redshift) #only taking account of bandpass correction and ignoring the spectral shape i.e. assuming f_nu=constant
+        else: #otherwise use polynomial fits    
+        
+          idx = (redshift <= 0.6)  #Below z=0.6 use full polynomial
+          K[idx] = self.__A(restframe_colour[idx])*(redshift[idx]-self.z0)**6 + \
                  self.__B(restframe_colour[idx])*(redshift[idx]-self.z0)**5 + \
                  self.__C(restframe_colour[idx])*(redshift[idx]-self.z0)**4 + \
                  self.__D(restframe_colour[idx])*(redshift[idx]-self.z0)**3 + \
@@ -610,9 +615,8 @@ class DESI_KCorrection(object):
                  self.__F(restframe_colour[idx])*(redshift[idx]-self.z0)**1 + \
                  self.__G(restframe_colour[idx])
 
-        idx = redshift > 0.6
-        
-        K[idx] = self.__X(restframe_colour[idx])*redshift[idx] + self.__Y(restframe_colour[idx])
+          idx = (redshift > 0.6) # above z=0.6 it says this does linear extrapolation
+          K[idx] = self.__X(restframe_colour[idx])*redshift[idx] + self.__Y(restframe_colour[idx])
         
         return  K    
 

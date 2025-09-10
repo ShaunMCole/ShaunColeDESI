@@ -14,7 +14,7 @@ iPython notebooks:
     Pertrosian.ipynb       -- contains some useful cocde for computing model petrosian magnitudes
     Galactocentric.ipynb   -- contains some code useful for converting between helio-centric and galacto-centric redshifts
     Y3.ipyn                -- Standard analysis of the augmented Y3 catalogue including various global LF estimates   
-    Y3-zslice.ipynb        -- Variant of the above in which data is split into redshift slices
+    Slices_vollim.ipynb        -- Variant of the above in which data is split into redshift slices
 
 Data files:
   Primary:  (can be copied from a DESI repository or elsewhere)

@@ -138,7 +138,7 @@ def root_itp2(f,aux,aux2,y,eps,a,b):
     ya[bmask]=f(a[bmask],aux[bmask],aux2)-y[bmask] #update ya for these cases 
 
     if(bmask.any()): 
-        print('Warning: Some roots were not bracketed by [a,b] and b is being returned in place of the root!')
+        print('Warning:',bmask.sum(),' roots were not bracketed by [a,b] and b is being returned in place of the root!')
         print('This is the right thing to do when zmax computed from the faint limit is greater than the zmax imposed in the sample selection')
         print('Similary it is the right thing to if zmin computed from the bright limit is less than the zmin imposed in the sample selection')
 #        for i in range(ya.size):
