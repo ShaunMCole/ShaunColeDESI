@@ -18,7 +18,7 @@ cosmo = FlatLambdaCDM(H0=100, Om0=0.313, Tcmb0=2.725)   #Standard Planck Cosmolo
 #Define Sample selection cuts and their display styles
 #and other "global" variables so they can be defined in any routine
 def selection(reg):
-    f_ran=0.01 #Random down sampling factor
+    f_ran=0.02 #Random down sampling factor
     Qevol=0.78 #0.78 #Assumed luminosity evolution parameter
     area_N_Y1=2393.4228/(4*np.pi*(180.0/np.pi)**2)
     area_S_Y1=5358.2728/(4*np.pi*(180.0/np.pi)**2)
@@ -122,9 +122,10 @@ def load_catalogue(fpath):
 
 ################################################################################################################
 
-# Flag each galaxy by which redshift bin it is in, whetherit forms part of the corresponding volumne limited sample
-# and record for it the volume of that redshift bin
+# Flag each galaxy by which redshift bin it is in, whether it forms part of the corresponding volumne limited sample and
+# whether it is the portion that is complete for all colours and  record for it the volume of that redshift bin
 # i.e. defines dat['izbin'], dat['invollim'] and dat['vollim']
+# also returns absolute magnitude completeness bounds for each slice
 def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
     # record which bin each galaxy falls in
     dat['izbin']= np.searchsorted(zbin_edges,dat['Z'],side='right')-1
@@ -136,34 +137,81 @@ def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
         regmask=(dat['reg']==reg)
         dat['vollim'][regmask]=Sel['area']*(4.0*np.pi/3.0)*( (cosmo.comoving_distance(zbin_edges[dat['izbin'][regmask]+1]).value)**3 - (cosmo.comoving_distance(zbin_edges[dat['izbin'][regmask]]).value)**3 )
 
+    #Compute the bounding bright and faint absolute magnitude limits in each slice  (colour dependent when using colour dependent k-correction) 
+    for reg in regions:
+        Sel=selection(reg) # import selection cuts
+        # limiting blue and red colurs to use extreme k-corrections when computing completeness bounds
+        GMR_blue=0.0*np.ones(zbin_edges.size-1)   
+        GMR_red=1.1*np.ones(zbin_edges.size-1)
+        kcorr_r  = DESI_KCorrection(band='R', file='jmext', photsys=reg) # Set up k-correction for this photometric region
+        
+        bright_bound_red= ABSMAG(Sel['bright'],zbin_edges[:-1],GMR_red,kcorr_r,Sel['Qevol']) #bright limit set by low redshift edge of the slice
+        faint_bound_red=  ABSMAG(Sel['faint'],zbin_edges[1:],GMR_red,kcorr_r,Sel['Qevol'])   #faint limit set by high redshift edge of the slice
+        bright_bound_blue= ABSMAG(Sel['bright'],zbin_edges[:-1],GMR_blue,kcorr_r,Sel['Qevol']) #bright limit set by low redshift edge of the slice
+        faint_bound_blue=  ABSMAG(Sel['faint'],zbin_edges[1:],GMR_blue,kcorr_r,Sel['Qevol'])   #faint limit set by high redshift edge of the slice
+        faint_bound=np.minimum(faint_bound_red,faint_bound_blue) #store the most restrictive of the two
+        bright_bound=np.maximum(bright_bound_red,bright_bound_blue)#store the most restrictive of the two
+        print('bright_bound_red',bright_bound_red)
+        print('bright_bound_blue',bright_bound_blue)
+        print('bright_bound',bright_bound)
+        print('faint_bound_red',faint_bound_red)
+        print('faint_bound_blue',faint_bound_blue)
+        print('faint_bound',faint_bound)
+        # loop over the redshift bins and plot the limits on each bin as horizontal line segments
+        for i in range(len(bright_bound)): 
+            span =np.array([zbin_edges[i],zbin_edges[i+1]])
+            top =faint_bound_red[i]+0.0*span
+            plt.plot(span,top,color='red', linestyle=Sel['style'],linewidth=2.0)
+            bottom =bright_bound_red[i]+0.0*span
+            plt.plot(span,bottom,color='red', linestyle=Sel['style'],linewidth=2.0)
+            span =np.array([zbin_edges[i],zbin_edges[i+1]])
+            top =faint_bound_blue[i]+0.0*span
+            plt.plot(span,top,color='blue', linestyle=Sel['style'],linewidth=2.0)
+            bottom =bright_bound_blue[i]+0.0*span
+            plt.plot(span,bottom,color='blue', linestyle=Sel['style'],linewidth=2.0)
+
+    dat['compl']= (dat['ABSMAG_RP1']<faint_bound[dat['izbin']]) & (dat['ABSMAG_RP1']>bright_bound[dat['izbin']])
+    
     # plot a random sample colour coded by bin
     rmask = (np.random.rand(dat['Z'].size)<plotfrac)
     vlrmask=rmask & dat['invollim']
     vlmask= dat['invollim']
+    complmask=dat['compl']
     #loop over the redshift bins
     for jzbin in range(0,zbin_edges.size-1):  
-        print('Number in volume limited sample:',jzbin,' with limits:',zbin_edges[jzbin],zbin_edges[jzbin+1],((dat['izbin']==jzbin) & vlmask).sum())
+        print('Number in volume limited sample:',jzbin,' with limits:',zbin_edges[jzbin],'<z<',zbin_edges[jzbin+1],'N=',((dat['izbin']==jzbin) & vlmask).sum())
     plt.scatter(dat['Z'][rmask],dat['ABSMAG_RP1'][rmask],marker=',',lw=0,s=1,c=10-dat['izbin'][rmask],cmap='inferno')
     plt.scatter(dat['Z'][vlrmask],dat['ABSMAG_RP1'][vlrmask],marker=',',lw=0,s=1,c=dat['izbin'][vlrmask],cmap='jet')
+    
     plt.xlim(0.0,0.6)
     plt.xlabel('$z$')
     plt.ylabel('$M_r$')
     plt.show()
-    # plot full volume limited samples
-    #plt.scatter(dat['Z'][mask],dat['ABSMAG_RP1'][mask],marker=',',lw=0,s=1,c=10-izbin[mask],cmap='jet')
+    for reg in regions:
+     Sel=selection(reg) # import selection cuts
+     # loop over the redshift bins and plot the limits on each bin as horizontal line segments
+        for i in range(len(bright_bound)): 
+            span =np.array([zbin_edges[i],zbin_edges[i+1]])
+            top =faint_bound[i]+0.0*span
+            plt.plot(span,top,color='red', linestyle=Sel['style'],linewidth=2.0)
+            bottom =bright_bound[i]+0.0*span
+            plt.plot(span,bottom,color='red', linestyle=Sel['style'],linewidth=2.0)
+    # plot volume limited samples and colour complete samples
     plt.scatter(dat['Z'][vlmask],dat['ABSMAG_RP1'][vlmask],marker=',',lw=0,s=1,c=dat['izbin'][vlmask],cmap='jet')
+    plt.scatter(dat['Z'][complmask],dat['ABSMAG_RP1'][complmask],marker=',',lw=0,s=1,c=dat['izbin'][complmask],cmap='inferno')
     plt.xlim(0.0,0.6)
     plt.xlabel('$z$')
     plt.ylabel('$M_r$')
     plt.show()
     # plot histogram of the number of objects in each bin overall and in volume limited subset
-    plt.hist(dat['Z'],bins=zbin_edges,label='All')
-    plt.hist(dat['Z'][vlmask],bins=zbin_edges,label='Volume limited')
+    plt.hist(dat['Z'],bins=zbin_edges,label='All',alpha=0.5)
+    plt.hist(dat['Z'][vlmask],bins=zbin_edges,label='Volume limited',alpha=0.5)
+    plt.hist(dat['Z'][complmask],bins=zbin_edges,label='Complete over colour',alpha=0.5)
     plt.xlim(0.0,0.6)
     plt.xlabel('$z$')
     plt.legend()
     plt.show()
-    return
+    return faint_bound,bright_bound
 ########################################################################################################################
 
 def solve_jackknife_nonsq(data, ndiv_ra=4, ndiv_dec=5, offset=275):
@@ -258,9 +306,12 @@ def set_jackknife(dat, regmask, limits, noffset, njack, verbose=False):
       
   #   The above ought to assign all objects to a jackknife region but rounding errors mean some escape. 
   #  The following code assigns any escapees to the nearest jackknife region by expanding each region by an amount eps.  
-  if ( np.count_nonzero(dat['ijack'][regmask]==-999) ):
-        print('Attempting to assign the remaining unassigned  ',np.count_nonzero(dat['ijack'][regmask]==-999),' objects in this region')
-        eps=1.0 #1 degree!!
+  num_missed=  np.count_nonzero(dat['ijack'][regmask]==-999) 
+  eps=0.05
+  iter=0  
+  while (num_missed>0 & iter<5):
+        eps=eps*2.0
+        print('Attempting to assign the remaining unassigned  ',num_missed,' objects by expanding jackknife regions by ',eps,' degrees')
         mask= regmask & (dat['ijack']==-999) # just the objects in this region that have not been assigned
         for ijack in range(0, njack ):
           # mask to select data in the ijack'th jackknife region
@@ -271,9 +322,11 @@ def set_jackknife(dat, regmask, limits, noffset, njack, verbose=False):
           if(np.count_nonzero(injack)>0):
             print('reassigning',np.count_nonzero(injack),'an additional objects to jackknife region',ijack+noffset)
             dat['ijack'][injack]=ijack+noffset
-  # report if still some unassigned            
-  if ( np.count_nonzero(dat['ijack'][regmask]==-999) ):
-        print('There are still ',np.count_nonzero(dat['ijack'][regmask]==-999),'unassigned objects in this region')          
+        iter += 1
+        num_missed=  np.count_nonzero(dat['ijack'][regmask]==-999) 
+      
+  # report if still some unassigned 
+  if ( num_missed>0): print('There are still ',np.num_missed,'unassigned objects in this region')          
   return
 
 ##########################################################################################################################
