@@ -581,7 +581,7 @@ class DESI_KCorrection(object):
 
 
     # the following is the function that returns the k-correction 
-    def k(self, redshift, restframe_colour, median=False, Nokcorrection=True):
+    def k(self, redshift, restframe_colour, median=False, Nokcorrection=False):
         """
         Polynomial fit to the DESI
         K-correction for z<0.6

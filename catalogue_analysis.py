@@ -18,7 +18,7 @@ cosmo = FlatLambdaCDM(H0=100, Om0=0.313, Tcmb0=2.725)   #Standard Planck Cosmolo
 #Define Sample selection cuts and their display styles
 #and other "global" variables so they can be defined in any routine
 def selection(reg):
-    f_ran=0.02 #Random down sampling factor
+    f_ran=1.0 #Random down sampling factor
     Qevol=0.78 #0.78 #Assumed luminosity evolution parameter
     area_N_Y1=2393.4228/(4*np.pi*(180.0/np.pi)**2)
     area_S_Y1=5358.2728/(4*np.pi*(180.0/np.pi)**2)
@@ -125,8 +125,9 @@ def load_catalogue(fpath):
 # Flag each galaxy by which redshift bin it is in, whether it forms part of the corresponding volumne limited sample and
 # whether it is the portion that is complete for all colours and  record for it the volume of that redshift bin
 # i.e. defines dat['izbin'], dat['invollim'] and dat['vollim']
-# also returns absolute magnitude completeness bounds for each slice
+# also returns absolute magnitude completeness bounds for each slice in each region 
 def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
+    nzslices=zbin_edges.size-1 # number of redshift slices
     # record which bin each galaxy falls in
     dat['izbin']= np.searchsorted(zbin_edges,dat['Z'],side='right')-1
     # For each galaxy flag as invollim if it meets the selection cuts througout the volume
@@ -137,72 +138,89 @@ def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
         regmask=(dat['reg']==reg)
         dat['vollim'][regmask]=Sel['area']*(4.0*np.pi/3.0)*( (cosmo.comoving_distance(zbin_edges[dat['izbin'][regmask]+1]).value)**3 - (cosmo.comoving_distance(zbin_edges[dat['izbin'][regmask]]).value)**3 )
 
-    #Compute the bounding bright and faint absolute magnitude limits in each slice  (colour dependent when using colour dependent k-correction) 
+    #Compute the bounding bright and faint absolute magnitude limits in each slice  (colour dependent when using colour dependent k-correction)
+    #Place holders for magnitude bounds
+    bright_bound_red=np.zeros((2,nzslices))
+    bright_bound_blue=np.zeros((2,nzslices))
+    bright_bound=np.zeros((2,nzslices))
+    faint_bound_red=np.zeros((2,nzslices))
+    faint_bound_blue=np.zeros((2,nzslices))
+    faint_bound=np.zeros((2,nzslices))
+    ireg=-1
     for reg in regions:
+        ireg += 1
         Sel=selection(reg) # import selection cuts
-        # limiting blue and red colurs to use extreme k-corrections when computing completeness bounds
-        GMR_blue=0.0*np.ones(zbin_edges.size-1)   
-        GMR_red=1.1*np.ones(zbin_edges.size-1)
+        print('ireg',ireg,reg)
+        # limiting blue and red colours to use extreme k-corrections when computing completeness bounds
+        GMR_blue=0.0*np.ones(nzslices)   
+        GMR_red=1.1*np.ones(nzslices)
         kcorr_r  = DESI_KCorrection(band='R', file='jmext', photsys=reg) # Set up k-correction for this photometric region
         
-        bright_bound_red= ABSMAG(Sel['bright'],zbin_edges[:-1],GMR_red,kcorr_r,Sel['Qevol']) #bright limit set by low redshift edge of the slice
-        faint_bound_red=  ABSMAG(Sel['faint'],zbin_edges[1:],GMR_red,kcorr_r,Sel['Qevol'])   #faint limit set by high redshift edge of the slice
-        bright_bound_blue= ABSMAG(Sel['bright'],zbin_edges[:-1],GMR_blue,kcorr_r,Sel['Qevol']) #bright limit set by low redshift edge of the slice
-        faint_bound_blue=  ABSMAG(Sel['faint'],zbin_edges[1:],GMR_blue,kcorr_r,Sel['Qevol'])   #faint limit set by high redshift edge of the slice
-        faint_bound=np.minimum(faint_bound_red,faint_bound_blue) #store the most restrictive of the two
-        bright_bound=np.maximum(bright_bound_red,bright_bound_blue)#store the most restrictive of the two
-        print('bright_bound_red',bright_bound_red)
-        print('bright_bound_blue',bright_bound_blue)
-        print('bright_bound',bright_bound)
-        print('faint_bound_red',faint_bound_red)
-        print('faint_bound_blue',faint_bound_blue)
-        print('faint_bound',faint_bound)
+        bright_bound_red[ireg,:]= ABSMAG(Sel['bright'],zbin_edges[:-1],GMR_red,kcorr_r,Sel['Qevol']) #bright limit set by low redshift edge of the slice
+        faint_bound_red[ireg,:]=  ABSMAG(Sel['faint'],zbin_edges[1:],GMR_red,kcorr_r,Sel['Qevol'])   #faint limit set by high redshift edge of the slice
+        bright_bound_blue[ireg,:]= ABSMAG(Sel['bright'],zbin_edges[:-1],GMR_blue,kcorr_r,Sel['Qevol']) #bright limit set by low redshift edge of the slice
+        faint_bound_blue[ireg,:]=  ABSMAG(Sel['faint'],zbin_edges[1:],GMR_blue,kcorr_r,Sel['Qevol'])   #faint limit set by high redshift edge of the slice
+        faint_bound[ireg,:]=np.minimum(faint_bound_red[ireg,:],faint_bound_blue[ireg,:]) #store the most restrictive of the two
+        bright_bound[ireg,:]=np.maximum(bright_bound_red[ireg,:],bright_bound_blue[ireg,:])#store the most restrictive of the two
+        #print('bright_bound_red',bright_bound_red[ireg,:])
+        #print('bright_bound_blue',bright_bound_blue[ireg,:])
+        #print('bright_bound',bright_bound[ireg,:])
+        #print('faint_bound_red',faint_bound_red[ireg,:])
+        #print('faint_bound_blue',faint_bound_blue[ireg,:])
+        #print('faint_bound',faint_bound[ireg,:])
         # loop over the redshift bins and plot the limits on each bin as horizontal line segments
-        for i in range(len(bright_bound)): 
+        for i in range(nzslices): 
             span =np.array([zbin_edges[i],zbin_edges[i+1]])
-            top =faint_bound_red[i]+0.0*span
+            top =faint_bound_red[ireg,i]+0.0*span
             plt.plot(span,top,color='red', linestyle=Sel['style'],linewidth=2.0)
-            bottom =bright_bound_red[i]+0.0*span
+            bottom =bright_bound_red[ireg,i]+0.0*span
             plt.plot(span,bottom,color='red', linestyle=Sel['style'],linewidth=2.0)
             span =np.array([zbin_edges[i],zbin_edges[i+1]])
-            top =faint_bound_blue[i]+0.0*span
+            top =faint_bound_blue[ireg,i]+0.0*span
             plt.plot(span,top,color='blue', linestyle=Sel['style'],linewidth=2.0)
-            bottom =bright_bound_blue[i]+0.0*span
+            bottom =bright_bound_blue[ireg,i]+0.0*span
             plt.plot(span,bottom,color='blue', linestyle=Sel['style'],linewidth=2.0)
+        regmask=(dat['reg']==reg)
+        # define a completeness flag if within the most restrictive magnitude bounds for this region
+        dat['compl'][regmask]= (dat['ABSMAG_RP1'][regmask]<faint_bound[ireg,dat['izbin']][regmask]) & (dat['ABSMAG_RP1'][regmask]>bright_bound[ireg,dat['izbin']][regmask])
+        #print('dat[compl]',dat['compl'])
+    
+        # plot a random sample colour coded by bin for this region
+        rmask = (np.random.rand(dat['Z'].size)<plotfrac) & regmask
+        vlmask = dat['invollim'] & regmask
+        vlrmask=rmask & dat['invollim'] & regmask
+        complmask=dat['compl'] & regmask
+        #loop over the redshift bins
+        for jzbin in range(0,nzslices):  
+            print('Number in volume limited sample:',jzbin,' with limits:',zbin_edges[jzbin],'<z<',zbin_edges[jzbin+1],'N=',((dat['izbin']==jzbin) & vlmask).sum())
+        plt.scatter(dat['Z'][rmask],dat['ABSMAG_RP1'][rmask],marker=',',lw=0,s=1,c=10-dat['izbin'][rmask],cmap='inferno',label=reg)
+        plt.scatter(dat['Z'][vlrmask],dat['ABSMAG_RP1'][vlrmask],marker=',',lw=0,s=1,c=dat['izbin'][vlrmask],cmap='jet')
+        plt.xlim(0.0,0.6)
+        plt.xlabel('$z$')
+        plt.ylabel('$M_r$')
+        plt.legend()
+        plt.show()
 
-    dat['compl']= (dat['ABSMAG_RP1']<faint_bound[dat['izbin']]) & (dat['ABSMAG_RP1']>bright_bound[dat['izbin']])
     
-    # plot a random sample colour coded by bin
-    rmask = (np.random.rand(dat['Z'].size)<plotfrac)
-    vlrmask=rmask & dat['invollim']
-    vlmask= dat['invollim']
-    complmask=dat['compl']
-    #loop over the redshift bins
-    for jzbin in range(0,zbin_edges.size-1):  
-        print('Number in volume limited sample:',jzbin,' with limits:',zbin_edges[jzbin],'<z<',zbin_edges[jzbin+1],'N=',((dat['izbin']==jzbin) & vlmask).sum())
-    plt.scatter(dat['Z'][rmask],dat['ABSMAG_RP1'][rmask],marker=',',lw=0,s=1,c=10-dat['izbin'][rmask],cmap='inferno')
-    plt.scatter(dat['Z'][vlrmask],dat['ABSMAG_RP1'][vlrmask],marker=',',lw=0,s=1,c=dat['izbin'][vlrmask],cmap='jet')
-    
-    plt.xlim(0.0,0.6)
-    plt.xlabel('$z$')
-    plt.ylabel('$M_r$')
-    plt.show()
+    ireg =-1
     for reg in regions:
-     Sel=selection(reg) # import selection cuts
-     # loop over the redshift bins and plot the limits on each bin as horizontal line segments
-        for i in range(len(bright_bound)): 
+         ireg+=1
+         Sel=selection(reg) # import selection cuts
+         # loop over the redshift bins and plot the limits on each bin as horizontal line segments
+         for i in range(nzslices): 
             span =np.array([zbin_edges[i],zbin_edges[i+1]])
-            top =faint_bound[i]+0.0*span
-            plt.plot(span,top,color='red', linestyle=Sel['style'],linewidth=2.0)
-            bottom =bright_bound[i]+0.0*span
-            plt.plot(span,bottom,color='red', linestyle=Sel['style'],linewidth=2.0)
-    # plot volume limited samples and colour complete samples
-    plt.scatter(dat['Z'][vlmask],dat['ABSMAG_RP1'][vlmask],marker=',',lw=0,s=1,c=dat['izbin'][vlmask],cmap='jet')
-    plt.scatter(dat['Z'][complmask],dat['ABSMAG_RP1'][complmask],marker=',',lw=0,s=1,c=dat['izbin'][complmask],cmap='inferno')
-    plt.xlim(0.0,0.6)
-    plt.xlabel('$z$')
-    plt.ylabel('$M_r$')
-    plt.show()
+            top =faint_bound[ireg,i]+0.0*span
+            plt.plot(span,top,color='red', linestyle=Sel['style'],linewidth=2.0,label='Faint limit')
+            bottom =bright_bound[ireg,i]+0.0*span
+            plt.plot(span,bottom,color='red', linestyle=Sel['style'],linewidth=2.0,label='Bright limit')
+         # plot volume limited samples and colour complete samples for this region
+         plt.scatter(dat['Z'][vlmask],dat['ABSMAG_RP1'][vlmask],marker=',',lw=0,s=1,c=dat['izbin'][vlmask],cmap='jet',label=reg)
+         plt.scatter(dat['Z'][complmask],dat['ABSMAG_RP1'][complmask],marker=',',lw=0,s=1,c=dat['izbin'][complmask],cmap='inferno')
+         plt.xlim(0.0,0.6)
+         plt.xlabel('$z$')
+         plt.ylabel('$M_r$')
+         plt.legend()
+         plt.show()
     # plot histogram of the number of objects in each bin overall and in volume limited subset
     plt.hist(dat['Z'],bins=zbin_edges,label='All',alpha=0.5)
     plt.hist(dat['Z'][vlmask],bins=zbin_edges,label='Volume limited',alpha=0.5)
@@ -897,9 +915,9 @@ def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot
         log_phi=np.log10(np.maximum(phi,eps))
 
         # compute jackknife errors if jackknife indices exist
-        print("jackknife index range:",np.min(dat["ijack"][mask]),np.max(dat["ijack"][mask]))
+
         njack=1+np.max(dat["ijack"][mask])-np.min(dat["ijack"][mask]) #number of jackknife samples
-        print('number of jackknife samples:',njack,' for region:',reg)
+        print('number of jackknife samples:',njack,' for region:',reg," in range:",np.min(dat["ijack"][mask]),np.max(dat["ijack"][mask]))
         phi_jack=np.zeros((njack,log_phi.size),dtype=float)# array in which to store all the jackknife estimates
         if (njack>1):  #Only do jackknife errors if we have jackknife indices otherwise default to Poisson errors
            for ijack in range(np.min(dat["ijack"][mask]), np.max(dat["ijack"][mask]) + 1):
