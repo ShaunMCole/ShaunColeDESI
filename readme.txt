@@ -14,7 +14,8 @@ iPython notebooks:
     Pertrosian.ipynb       -- contains some useful cocde for computing model petrosian magnitudes
     Galactocentric.ipynb   -- contains some code useful for converting between helio-centric and galacto-centric redshifts
     Y3.ipyn                -- Standard analysis of the augmented Y3 catalogue including various global LF estimates   
-    Slices_vollim.ipynb        -- Variant of the above in which data is split into redshift slices
+    Slices_vollim.ipynb    -- Variant of the above in which data is split into redshift slices, LFs estimated and stored in named file
+    LFPlotting.ipynb       -- Reads the LFs tabulated for each redshifts slice, manipulates and plots   
 
 Data files:
   Primary:  (can be copied from a DESI repository or elsewhere)
@@ -26,3 +27,5 @@ Data files:
      ./data/jmext_kcorr_S_rband_z01.dat    -- tabulated kcorrection polynomials for South
      ./data/wz_N.fits                      -- tabulated redshift completeness weights for North
      ./data/wz_S.fits                      -- tbaulated redshift completeness weights for South  
+   Tertiary
+      LF_Sept2025.fits                     -- LF estimates in redshift slices 
