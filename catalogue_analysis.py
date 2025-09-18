@@ -13,11 +13,12 @@ cosmo = FlatLambdaCDM(H0=100, Om0=0.313, Tcmb0=2.725)   #Standard Planck Cosmolo
 
 
 
-########################################################################################################################    
+
     
 #Define Sample selection cuts and their display styles
 #and other "global" variables so they can be defined in any routine
 def selection(reg):
+    """sets up the selection cuts for each region so that a consistent set can be used everywhere"""
     f_ran=1.0 #Random down sampling factor
     Qevol=0.78 #0.78 #Assumed luminosity evolution parameter
     area_N_Y1=2393.4228/(4*np.pi*(180.0/np.pi)**2)
@@ -35,9 +36,10 @@ def selection(reg):
     else:
         print('Selection(region): unknown region')  
     return x
-########################################################################################################################
+
 # load in catalogues
 def Y3load_catalogues(fpath):
+    """Load the Y3 LSS catalogue"""
     dat = Table.read(fpath)
     # Copy of PHOTSYS which is N/S to the "reg" column this code uses
     dat.add_column(Column(name='reg', data=dat['PHOTSYS']))
@@ -58,9 +60,10 @@ def Y3load_catalogues(fpath):
 
 
     return dat
-########################################################################################################################
-# load in catalogues
+
+
 def load_catalogues(fpathN,fpathS):
+    """Load earlier LSS catalogues that were split N and """
     datS = Table.read(fpathS)
     datS.add_column(Column(name='reg', data=["S" for x in range(datS['Z'].size)]))
     datN = Table.read(fpathN)
@@ -90,9 +93,10 @@ def load_catalogues(fpathN,fpathS):
 #    dat.add_column(Column(name='OBS_GMR', data=dat['gmag']-dat['rmag']))
 
     return dat
-########################################################################################################################
-# load in catalogue
+
+
 def load_catalogue(fpath):
+    """load older LSS catalogu"""
     dat = Table.read(fpath)
     dat.add_column(Column(name='reg', data=dat['PHOTSYS'] ))
     # dummy arrays in which to later store the correct quantities
@@ -120,13 +124,14 @@ def load_catalogue(fpath):
 
     return dat
 
-################################################################################################################
+
 
 # Flag each galaxy by which redshift bin it is in, whether it forms part of the corresponding volumne limited sample and
 # whether it is the portion that is complete for all colours and  record for it the volume of that redshift bin
 # i.e. defines dat['izbin'], dat['invollim'] and dat['vollim']
 # also returns absolute magnitude completeness bounds for each slice in each region 
 def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
+    """Flag galaxies by redshift slice, flag as whether in volume limited subset etc"""
     nzslices=zbin_edges.size-1 # number of redshift slices
     # record which bin each galaxy falls in
     dat['izbin']= np.searchsorted(zbin_edges,dat['Z'],side='right')-1
@@ -230,13 +235,14 @@ def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
     plt.legend()
     plt.show()
     return faint_bound,bright_bound
-########################################################################################################################
+
 
 def solve_jackknife_nonsq(data, ndiv_ra=4, ndiv_dec=5, offset=275):
-    '''
+    """
     Find the boundaries to split up data into jackknife areas based on (ra, dec) in (ndiv_ra x ndiv_dec) chunks.
-    The offset allows the RA edge of the first bin to be chosen.
-    '''           
+    The offset allows the RA edge of the first bin to be chosen. (should be run on the random catalogue)
+    """
+    
     print('length of data table:',len(data))        
     njack         = ndiv_ra * ndiv_dec
     #jk_volfrac    = (njack - 1.) / njack 
@@ -305,7 +311,7 @@ def solve_jackknife_nonsq(data, ndiv_ra=4, ndiv_dec=5, offset=275):
 ###########################################################################################################################
 #  Set jackknife indices for the objects in data[regmask]
 def set_jackknife(dat, regmask, limits, noffset, njack, verbose=False):
-
+  """Assign each object to jackknife regions (previously set up by solve_jackknife_nonsq())"""
   # initialise min and max assigned per region   
   min_assigned=100000000
   max_assigned=0  
@@ -362,18 +368,17 @@ def z_tozLG(dat):
     #Compute redshift in the LG frame assuming input redshift is Heliocentric
     dat.add_column(Column(name='ZLG', data= (1.0+dat['Z'])*(1.0+v_proj/(299792.458))-1.0 ))
     return
-########################################################################################################################
+
 # ABSMAG_R= appmag -DMOD  -kcorr_r.k(z, rest_GMR) +Qevol*(z-0.1) 
 def ABSMAG(appmag,z,rest_GMR,kcorr_r,Qevol):
+        """Compute absolute magnitude taking into account k-correction and evolution parameterized by Qevol """
         DMOD=25.0+5.0*np.log10(cosmo.luminosity_distance(z).value)  
         ABSMAG=appmag-DMOD-kcorr_r.k(z,rest_GMR)+Qevol*(z-0.1)
         return ABSMAG
     
 # Make plots of the k-corrections to check they are sensible and smooth in both redshift and colour
-########################################################################################################################
-
 def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True):
-    
+    """Assign restframe colours from g-r vs redshift lookup table and ABSMAG using k-correction polynomials"""
     for reg in regions:
       print('Computing restframe colours for region ',reg)
       Sel=selection(reg) # define selection parameters for this region
@@ -396,12 +401,10 @@ def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True):
     return
 
 
-########################################################################################################################    
 
 #Compute zmax,zmin and along with v and vmax add to the data table    
 def compute_zmax_vmax(dat,regions):
-
-
+    """Compute vmax and vmin using k-correction polynomials """
     # We want to solve
     # appmag=ABSMAG_R+ DMOD  +kcorr_r.k(z, rest_GMR) -Qevol*(z-0.1) = maglimit [19.5 for BSG S]
     # which is equivalent to 
@@ -466,8 +469,9 @@ def compute_zmax_vmax(dat,regions):
     dat.add_column(Column(name='vmin', data=vmin))
     del zguess0,zguess1,zmin,zmax,v,vmax,vmin,mask,regmask   #tidy up  
     return
-####################################################
+
 def plot_kcorr(regions):
+    """plot k-correction polynomials"""
     # extract the default colour sequence to have more control of line colors
     prop_cycle = plt.rcParams['axes.prop_cycle']
     colors = prop_cycle.by_key()['color']
@@ -495,10 +499,10 @@ def plot_kcorr(regions):
 
     return
 
-########################################################################################################################
 
 #Plot how z_max depends on absolute magnitude and colour code by rest frame colour
 def plot_zmax_absmag(dat):
+    """ Plot how z_max depends on absolute magnitude and colour code by rest frame colour"""
     cmap= plt.get_cmap('jet')
     col=np.clip(((dat['REST_GMR_0P1']+0.5)/2.0),0.0,1.0)
     plt.scatter(dat['ABSMAG_RP1'],dat['zmax'], marker='.', c=col ,cmap=cmap, linewidths=0,s=0.25,alpha=0.2,label='colour coded by rest frame colour')
@@ -509,9 +513,12 @@ def plot_zmax_absmag(dat):
     plt.legend()
     plt.show()
     return
-########################################################################################################################
+
+
+
 #Plot how z_min depends on absolute magnitude and colour code by rest frame colour
 def plot_zmin_absmag(dat):
+    """ Plot how z_min depends on absolute magnitude and colour code by rest frame colour"""
     cmap= plt.get_cmap('jet')
     col=np.clip(((dat['REST_GMR_0P1']+0.5)/2.0),0.0,1.0)
     plt.scatter(dat['ABSMAG_RP1'],dat['zmin'], marker='.', c=col ,cmap=cmap, linewidths=0,s=0.25,alpha=0.2,label='colour coded be rest-frame colour')
@@ -523,10 +530,11 @@ def plot_zmin_absmag(dat):
     plt.show()
     return
 
-########################################################################################################################
+
 
 #Plot how z_max depends z colour code by absolute magnitude
 def plot_zmax_z(dat):
+    """Plot how z_max depends z colour code by absolute magnitude"""
     cmap= plt.get_cmap('jet')
     col=np.clip(((dat['ABSMAG_RP1']+22)/10.0),0.0,1.0)
     plt.scatter(dat['Z'],dat['zmax'], marker='.', c=col ,cmap=cmap, linewidths=0,s=0.25,alpha=0.2,label='no point should have z>zmax')
@@ -538,10 +546,11 @@ def plot_zmax_z(dat):
     plt.show()
     return
 
-########################################################################################################################
+
 
 #Plot how z_min depends z colour code by absolute magnitude
 def plot_zmin_z(dat):
+    """Plot how z_min depends z colour code by absolute magnitude"""
     cmap= plt.get_cmap('jet')
     col=np.clip(((dat['ABSMAG_RP1']+22)/10.0),0.0,1.0)
     plt.scatter(dat['Z'],dat['zmin'], marker='.', c=col ,cmap=cmap, linewidths=0,s=0.25,alpha=0.2,label='no point should have z<zmin')
@@ -554,11 +563,9 @@ def plot_zmin_z(dat):
     return
 
 
-
-########################################################################################################################
- ##################################################################
 # make a histogram comparing the redshift distributions to selection limits
 def hist_nz(dat,ran,regions):
+    """Plot the redshuft distribution dN/dz """
     bins = np.arange(0, 0.6, 0.01)
     bin_cen=(bins[:-1] + bins[1:]) / 2.0
     for reg in regions:
@@ -587,9 +594,10 @@ def hist_nz(dat,ran,regions):
     plt.legend()
     plt.show()
     return
-#################################################################################################################
+
 # plot the V/Vmax distribution for the selected sample
 def plot_v_vmax(dat,regions):
+    """plot the V/Vmax distribution for the selected sample"""
     bin_edges = np.linspace(0.0, 1.0, 50)
     dbin=bin_edges[1]-bin_edges[0]
     #v_vmax=np.copy(dat['vmax'])
@@ -608,10 +616,11 @@ def plot_v_vmax(dat,regions):
     plt.legend()
     plt.show()
     return
-######################################################################################################################
+
 # magnitude-reshifts scatterplot
 # to check data extends to the selection limits
 def plot_mag_z(dat,regions,contours=False):
+    """magnitude-reshifts scatterplot"""
     # Plotting ranges
     range=[[0.0,0.65],[15.5,19.55]]
     sigma=1.0 # smoothing to apply before making contours
@@ -648,9 +657,12 @@ def plot_mag_z(dat,regions,contours=False):
     plt.ylabel('r')
     plt.show()
     return
-######################################################################################################################
+
+
+
 # Colour-Magnitude Scatter plot with marginal histograms
 def plot_col_mag(dat,regions):
+    """colour-magnitude scatterplot"""
     def flatten(l):        # limits of data to use in histogram()
         return [item for sublist in l for item in sublist]
 
@@ -736,9 +748,11 @@ def plot_col_mag(dat,regions):
     del mask,smask,regmask # tidy up
     del axcolmag,axcolmag_histx,axcolmag_histy
     return
-######################################################################################################################
+
+
 # Colour-Magnitude Scatter plot with marginal histograms with objects weighted by 1/Vmax
 def plot_col_mag_withvmax(dat,regions):
+    """ colour magnitude scatter plot weighted by 1/Vmax"""
     def flatten(l):        # limits of data to use in histogram()
         return [item for sublist in l for item in sublist]
 
@@ -823,10 +837,12 @@ def plot_col_mag_withvmax(dat,regions):
     del mask,smask,regmask # tidy up
     del axcolmag,axcolmag_histx,axcolmag_histy
     return
-####################################################################################################################### All-sky maps 
+
+
+# All-sky maps 
 #  see https://notebook.community/desihub/desiutil/doc/nb/SkyMapExamples for examples of how to make plots like these
 def sky_plot(dat,regions):
-
+    """All-sky scatter plot with galactic plane and ecliptic marked"""
     # All-sky scatter plot with galactic plane and ecliptic marked
     ax= init_sky()
     for reg in regions:
@@ -838,8 +854,9 @@ def sky_plot(dat,regions):
     # healpix source density map in healpix's of less than max_bin_area sq degrees
     ax= plot_sky_binned(dat['RA'] ,dat['DEC'], plot_type='healpix', max_bin_area=4.0, verbose=True)
     return
-######################################################################################################################
+
 def sky_plot_jack(dat):
+    """All-sky scatter plot with galactic plane and ecliptic marked with object jackknide regions in different colours"""
     colour = ['blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'black', 'gray', 'purple', 'orange', 'brown', 'pink', 'lime', 'teal', 'lavender', \
     'turquoise', 'gold', 'darkblue', 'darkgreen', 'darkred', 'darkcyan', 'darkmagenta', 'forestgreen', 'lightblue', 'lightgreen', 'lightcoral',  'lightpink', 'lightskyblue', 'lightgray']
     ncol = len(colour)
@@ -855,10 +872,10 @@ def sky_plot_jack(dat):
     mask=(dat['ijack']==-999)
     p = ax.scatter(ax.projection_ra(dat['RA'][mask]),ax.projection_dec(dat['DEC'][mask]),color='black',s=20.0, marker='X', linewidths=0)  
     return
-###################################################################################################    
+    
 #Cone plot
 def cone_plot(dat,regions):
-    #This is hardwired to produce two particular cone plots but could be adapted
+    """This is hardwired to produce two particular cone plots but could be adapted"""
     for reg in regions:
         regmask = (dat['reg']==reg)
         Sel=selection(reg) # define selection parameters for this region
@@ -885,11 +902,13 @@ def cone_plot(dat,regions):
         plt.show()
     del x,y,ra # tidy up
     return
-######################################################################################################################
+
+
+
 #Plot 1/vmax Luminosity function
 #with different plotting options
 def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot=False, binwidth=0.25, ratio=False, Veff=False, Vollim=False):
-    
+    """1/Vmax LF estimator"""
     eps=1.0e-10 #used to avoid divide by zero
     bins = np.arange(-24.0, -11.1, binwidth)
     bin_cen = (bins[:-1] + bins[1:]) / 2.0
@@ -992,10 +1011,13 @@ def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot
 
     del weight,log_phi_sch,l_lstar,phi_sch,phi,phi_err #tidy up
     return log_phi,log_phi_low,log_phi_hi,bin_cen   # return the LF and error band of the estimate from the last region
-######################################################################################################################
+    
+
+
+
 #Plot SWML Luminosity function   (Uses method from Eftathiou, Ellis and Petersen 1988 MNRAS 232,431 [EEP])
 def lumfun_swml(dat,regions,log_phi_guess,magbins):
-    
+    """SWML LF estimator"""
     #
     extra_plots=False
     
@@ -1118,10 +1140,15 @@ def lumfun_swml(dat,regions,log_phi_guess,magbins):
 
     del phi0,phi1,count,absmag_faint,phi_cuml,denominator,mask,regmask,magmask,galmask
     return log_phi,magbins
-####################################################################################################################################
+
+
+
+
+
 #  Generate a random catalogue with no clustering and specified LF
 #  **Haven't checked that it get things right to within one bin width**
 def makefake(reg,nran):
+    """ make a random catalogue.  **Needs to be checked**"""
     Sel=selection(reg) 
     #Generate points in spherical shell with chosen [zmin,zmax] 
     rmin=cosmo.comoving_distance(Sel['zmin']).value
@@ -1218,7 +1245,7 @@ def makefake(reg,nran):
     dat = Table([absmag[fmask], zred[fmask], rest_GMR[fmask], rmag[fmask], gmr[fmask], reg[fmask], weight[fmask]], names=('ABSMAG_RP1', 'Z', 'REST_GMR_0P1', 'rmag', 'gmr_obs', 'reg', 'WEIGHT'), meta={'name': 'mock data'})
     dat.info('stats')
     return dat
-#################################################################################################################################################################################################################
+
 #Computes a V_eff for each galaxiy that can be used in place V_max in LF and other weighted estimates.
 
 # The basic idea is V_eff= integral  Delta(z) dV/dz  dz  where the overdensity Delta(z) is estimated 
@@ -1227,6 +1254,7 @@ def makefake(reg,nran):
 #
 
 def compute_veff(dat,regions):
+    """Compute Veff"""
     #Seemed to work better (larger p-values) before the weigths dat['WEIGHT'] were inserted.
     #But actually that should happen as it is the weigthed Veff/Veff,max that should be uniform
     #not the unweighted one we are testing.
@@ -1388,7 +1416,11 @@ def compute_veff(dat,regions):
 
    
     return
-#################################################################################################################################################
+
+
+
+
+
 #Computes a V_eff for each galaxiy that can be used in place V_max in LF and other weighted estimates.
 
 # The basic idea is V_eff= integral  Delta(z) dV/dz  dz  where the overdensity Delta(z) is estimated 
@@ -1397,6 +1429,7 @@ def compute_veff(dat,regions):
 # This version using log binning
 
 def compute_veff_logspacing(dat,regions):
+    """Compute Veff using log-spaced distance bins (preferred)"""
     #Seemed to work better (larger p-values) before the weigths dat['WEIGHT'] were inserted.
     #But actually that should happen as it is the weigthed Veff/Veff,max that should be uniform
     #not the unweighted one we are testing.
@@ -1593,9 +1626,12 @@ def compute_veff_logspacing(dat,regions):
     
     
     return 
-####################################################################################################################################################################################
+
+
+
 # Read John Moustakas's Fast Spec Catalogue
 def read_fsf(fpath):
+    """Read John Moustakas' FastSpecFit catalogue"""
     print('Reading John Moustakas FSF catalogue {}...'.format(fpath))
     fsf = Table.read(fpath)
 
@@ -1616,15 +1652,110 @@ def read_fsf(fpath):
 
     return fsf
 
-######################################################################
-def remap_rmags(fsf):
-  
+def remap_rmags(dat,colcut=0.8):
+    """Remove bias between N and S bright red galaxy magnitudes"""
+    # Compare the N/S distributions of absolute magnitude for red galaxies
+    smask=(dat['PHOTSYS']=='S') & (dat['REST_GMR_0P1']>colcut)
+    shist,bins=np.histogram(dat['ABSMAG_RP1'][smask], bins=1000)
+    binwidth=bins[1]-bins[0]
+    binc=bins[1:]-0.5*binwidth
+    shist=shist/(binwidth*smask.sum()) # normalize
+    nmask=(dat['PHOTSYS']=='N') & (dat['REST_GMR_0P1']>colcut)
+    nhist,bins=np.histogram(dat['ABSMAG_RP1'][nmask], bins=bins)
+    nhist=nhist/(binwidth*nmask.sum()) # normalize
+
+    plt.plot(binc,shist,label='S red galaxies',color='red')
+    plt.plot(binc,nhist,label='N red galaxies',color='blue')
+    plt.legend()
+    plt.ylim([0.0,1.0])
+    plt.xlim([-25,-10])
+    plt.xlabel('M_R')
+    plt.ylabel('P(M_R)')
+    plt.show()
     
-    # Compute rest frame (z=0.1) colours
+    # Form cumulative probability distributions 
+    scum=np.cumsum(shist)*binwidth
+    ncum=np.cumsum(nhist)*binwidth
+    plt.plot(binc,scum,label='S red galaxies',color='red')
+    plt.plot(binc,ncum,label='N red galaxies',color='blue')
+    plt.legend()
+    plt.ylim([0.0,1.0])
+    plt.xlim([-25,-10])
+    plt.xlabel('M_R')
+    plt.ylabel('P(<(M_R))')
+    plt.show()
+        
+    # For a given S G-R find the N G-R that has the same cumulative probability
+    cprob=np.interp(dat['ABSMAG_RP1'][smask],binc,scum) # find cumulative probability from the N distribution
+    newabsmag=np.interp(cprob,ncum,binc) # find absmag corresponding to the N cumulative probability
+    
+    # Use this absmag to define a new r-band absolute magnitude that will produce the required absolute magnitude
+    magdiff=dat['ABSMAG_RP1'][smask]-newabsmag 
+    plt.hist(magdiff,bins=100)
+    plt.xlabel('$\Delta M_r$')
+    plt.show()
+    #Update the absolute magnitude and the corresponding apparent magntudes to keep the colours unchanged
+    dat['ABSMAG_RP1'][smask]=newabsmag
+    dat['rmag'][smask]=dat['rmag'][smask]-magdiff
+    dat['gmag'][smask]=dat['gmag'][smask]-magdiff
+    print('**Should also update apparent magnitudes and fluxes in other bands if they are to be used')
    
-    fsf.info('stats')
     
-       
+    # Replot overall and in redshift bins
+    shist,bins=np.histogram(dat['ABSMAG_RP1'][smask], bins=500)
+    binwidth=bins[1]-bins[0]
+    binc=bins[1:]-0.5*binwidth
+    shist=shist/(binwidth*smask.sum()) # normalize
+    nhist,bins=np.histogram(dat['ABSMAG_RP1'][nmask], bins=bins)
+    nhist=nhist/(binwidth*nmask.sum()) # normalize
+
+    plt.plot(binc,shist,label='S red galaxies',color='red')
+    plt.plot(binc,nhist,label='N red galaxies',color='blue')
+    plt.legend()
+    plt.ylim([0.0,1.0])
+    plt.xlim([-25,-10])
+    plt.xlabel('G-R')
+    plt.ylabel('P(G-R)')
+    plt.show()
+
+
+    print('Plots for individual redshift slices')
+    for zbin in np.linspace(0.0,0.5,5):
+        
+        # Compare the revised N/S distributions of rest frame colour
+        mask=smask & (dat['Z']>zbin) &  (dat['Z']<zbin+0.1)
+        shist,bins=np.histogram(dat['ABSMAG_RP1'][mask], bins=500)
+        binwidth=bins[1]-bins[0]
+        binc=bins[1:]-0.5*binwidth
+        shist=shist/(binwidth*mask.sum()) # normalize
+        mask=nmask & (dat['Z']>zbin) &  (dat['Z']<zbin+0.1)
+        nhist,bins=np.histogram(dat['ABSMAG_RP1'][mask], bins=bins)
+        nhist=nhist/(binwidth*mask.sum()) # normalize
+
+        plt.plot(binc,shist,label='S z='+str(zbin),color='red')
+        plt.plot(binc,nhist,label='N z='+str(zbin),color='blue')
+        plt.legend()
+        plt.ylim([0.0,3.5])
+        plt.xlim([-25,-10])
+        plt.xlabel('G-R')
+        plt.ylabel('P(G-R)')
+        plt.show()
+    
+    return dat
+
+def remapfsf_rmags(fsf):
+  
+    """Remap FSF resframe colour and absolute magnitude to remove the bias between the N and S restframe colour distribution"""
+    #For the South map the R magnitudes (absolute and apparent) to change the absolute magnitude distribution to agree with he North
+    # Rationale:  The rest frame colour distributions in N and S ought to agree. The fact that thye don't could be due not knowing one 
+    # of the filter curves sufficiently acuurately this then causes the fitted SED to be biased to compensate and hence the inferred rest
+    # frame colour to be wrong. Here we assume the filters for the N to be correct and attempt to debias the S restfame colours and r-band
+    # absolute magnitudedso as to match the N colour dsitribuion. We could do it the other way round as we don't know which is right but either way removes the bias.
+    #
+    # If we use these resulting colours to construct the lookup table to convert observed g-r and redshift to rest frame G-R then these will be debiased.
+    # There is no need appply any magnitude shifts to the observed quanitites.
+    # We should then compute k-corrections using data binned by this restframe colour and using the debiased FSF absolute ma
+
     
     # Compare the N/S distributions of rest frame colour
     mask=(fsf['PHOTSYS']=='S')
@@ -1657,14 +1788,10 @@ def remap_rmags(fsf):
     plt.ylabel('P(<(G-R))')
     plt.show()
         
-    # For a given N G-R find the S G-R that has the same cumulative probability
-    mask=(fsf['PHOTSYS']=='N')
-    cprob=np.interp(fsf['REST_GMR_0P1'][mask],binc,ncum) # find cumulative probability from the N distribution
-    newcol=np.interp(cprob,ncum,binc) # find colour corresponding to this cumulative probability
-    # check this works 
-    diff=(newcol-fsf['REST_GMR_0P1'][mask])/binwidth
-    print('mean offset in binwidths:',diff.sum()/mask.sum())
-    newcol=np.interp(cprob,scum,binc) # find colour corresponding to the S cumulative probability
+    # For a given S G-R find the N G-R that has the same cumulative probability
+    mask=(fsf['PHOTSYS']=='S')
+    cprob=np.interp(fsf['REST_GMR_0P1'][mask],binc,scum) # find cumulative probability from the N distribution
+    newcol=np.interp(cprob,ncum,binc) # find colour corresponding to the N cumulative probability
     
     # Use this colour to define a new r-band magnitude that will produce the required colour
     # and update both the colour and derived k correction to match
@@ -1695,7 +1822,8 @@ def remap_rmags(fsf):
     plt.ylabel('P(G-R)')
     plt.show()
 
-    
+
+    print('Plots for individual redshift slices')
     for zbin in np.linspace(0.0,0.5,5):
         
         # Compare the revised N/S distributions of rest frame colour
@@ -1708,8 +1836,8 @@ def remap_rmags(fsf):
         nhist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=bins)
         nhist=nhist/(binwidth*mask.sum()) # normalize
 
-        plt.plot(binc,shist,label='S')
-        plt.plot(binc,nhist,label='N')
+        plt.plot(binc,shist,label='S z='+str(zbin))
+        plt.plot(binc,nhist,label='N z='+str(zbin))
         plt.legend()
         plt.ylim([0.0,3.5])
         plt.xlim([-0.25,1.25])
@@ -1718,9 +1846,11 @@ def remap_rmags(fsf):
         plt.show()
     
     return fsf
-#######################################################################################################   
+
+
+
 def  load_full_catalogue_subsets(fullfile):
-    
+    """depracated"""    
     zmin = 0.0  # Should be the minimum redshift cut used in making the clustering catalogue and should probably be set to exlcude stars i.e. 0.00125 or so
     full = Table.read(fullfile)
     
@@ -1753,9 +1883,12 @@ def  load_full_catalogue_subsets(fullfile):
     
     
     return zgood, observed
-    ###########################################################################################
+
+
+
 # extract a subset of the data based on redshift limits and update the zmin,zmax and vmax accordingly
 def redhsift_slice(dat,zmin_sub,zmax_sub):
+    """depracated"""  
     submask= (dat['Z']>zmin_sub) & (dat['Z']<zmax_sub)
     datsub=dat[submask]
     datsub['zmax'][datsub['zmax']>zmax_sub]=zmax_sub #limit zmax to that of the subsample
@@ -1764,8 +1897,12 @@ def redhsift_slice(dat,zmin_sub,zmax_sub):
     datsub['vmax']=dat['vmax'][submask]*    ( (cosmo.comoving_distance(datsub['zmax']).value)**3 -(cosmo.comoving_distance(datsub['zmin']).value)**3 ) \
                       /    ( (cosmo.comoving_distance(dat['zmax'][submask]).value)**3 -(cosmo.comoving_distance(dat['zmin'][submask]).value)**3 )
     return datsub
-#############################################################################################
+
+
+
+
 def plot_sizes(dat,regions):
+    """depracated"""  
     bins = np.arange(0, 40.0, 1.0)
     bin_cen=(bins[:-1] + bins[1:]) / 2.0
     for reg in regions:
@@ -1783,6 +1920,7 @@ def plot_sizes(dat,regions):
     return
 
 def plot_depths(dat,regions):
+    """depracated"""  
     eps=1.0e-10
     psfmagdepth=22.5-2.5*np.log10(5.0/(eps+np.sqrt(dat['PSFDEPTH_R'])))
     galmagdepth=22.5-2.5*np.log10(5.0/(eps+np.sqrt(dat['GALDEPTH_R'])))
