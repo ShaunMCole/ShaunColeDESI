@@ -19,7 +19,7 @@ cosmo = FlatLambdaCDM(H0=100, Om0=0.313, Tcmb0=2.725)   #Standard Planck Cosmolo
 #and other "global" variables so they can be defined in any routine
 def selection(reg):
     """sets up the selection cuts for each region so that a consistent set can be used everywhere"""
-    f_ran=1.0 #Random down sampling factor
+    f_ran=0.02 #Random down sampling factor
     Qevol=0.78 #0.78 #Assumed luminosity evolution parameter
     area_N_Y1=2393.4228/(4*np.pi*(180.0/np.pi)**2)
     area_S_Y1=5358.2728/(4*np.pi*(180.0/np.pi)**2)
@@ -60,6 +60,42 @@ def Y3load_catalogues(fpath):
 
 
     return dat
+
+
+def  load_full_catalogue_subsets(fullfile):
+    """Read the full catalogue and extract the good and observed subsets"""    
+    zmin = 0.0  # Should be the minimum redshift cut used in making the clustering catalogue and should probably be set to exlcude stars i.e. 0.00125 or so
+    full = Table.read(fullfile)
+    
+    # Compute magnitudes and fibre magnitudes and add to the full table
+    full.add_column(Column(name='rmag', data=22.5-2.5*np.log10(full['FLUX_R']/full['MW_TRANSMISSION_R']) ))
+    full.add_column(Column(name='fib_rmag', data=22.5-2.5*np.log10(full['FIBERFLUX_R']/full['MW_TRANSMISSION_R']) ))
+    print('Size of Full catalogue',full['rmag'].size)
+
+    #Throw away objects with fibre mag>23 as they should not be in BGS but this because the photometry changed and we should keep them
+    #full = full[(full['fib_rmag']<23.0)] 
+    #print('size of Full catalogue if limited to r_fib<23 cut',full['rmag'].size)
+    print('Faintest Fibre mag:',np.amax(full['fib_rmag']),'NB BGS was limited to r_fib=23 in an earlier version of the photometry')
+
+
+    #The observed subset is defined by those reachable by a fibre (ZWARN not Nan) that isn't broken (ZWARN=999999) that achieves a GOODHARDLOC and is predicted to yield decent SNR
+    mask = (full['ZWARN']*0 == 0) & (full['ZWARN'] != 999999) & (full['GOODHARDLOC'] == 1)  & (full['TSNR2_BGS']>1000.0)
+    #From the observed subset we ideally want to remove all stars but settle for removing just the spectroscopically confirmed stars
+    mask = ~mask  | (full['Z_not4clus']<zmin) #true for all the unobserved (~mask) and all the observed that are stars (z<zmin)
+    mask = ~mask  # now false for the above, i.e. true for all observed that aren't spectroscopically confirmed to be z<zmin (stars)
+    observed=full[mask]
+    #The subset of galaxies with good redshift have no ZWARN have large DELTACHI2 and are above zmin (i.e. not stars)
+    mask_zgood =(observed['DELTACHI2'] > 40) & (observed['ZWARN'] == 0) & (observed['Z_not4clus']>zmin)
+    zgood=observed[mask_zgood]
+    
+    #zgood.info('stats')
+    print('number of objects in the observed subset',  observed['TARGETID'].size)
+    print('number of objects in the good redshift subset',zgood['TARGETID'].size)
+    #observed.info('stats')
+    print('Faintest Observed Fibre mag:',np.amax(observed['fib_rmag']))
+    
+    
+    return zgood, observed
 
 
 def load_catalogues(fpathN,fpathS):
@@ -1746,26 +1782,50 @@ def remap_rmags(dat,colcut=0.8):
 def remapfsf_rmags(fsf):
   
     """Remap FSF resframe colour and absolute magnitude to remove the bias between the N and S restframe colour distribution"""
-    #For the South map the R magnitudes (absolute and apparent) to change the absolute magnitude distribution to agree with he North
+    #For the North map the R magnitudes (absolute and apparent) to change the absolute magnitude distribution to agree with he South
     # Rationale:  The rest frame colour distributions in N and S ought to agree. The fact that thye don't could be due not knowing one 
     # of the filter curves sufficiently acuurately this then causes the fitted SED to be biased to compensate and hence the inferred rest
-    # frame colour to be wrong. Here we assume the filters for the N to be correct and attempt to debias the S restfame colours and r-band
-    # absolute magnitudedso as to match the N colour dsitribuion. We could do it the other way round as we don't know which is right but either way removes the bias.
+    # frame colour to be wrong. Here we assume the filters for the S (DECaLS) to be correct and attempt to debias the N restfame colours and r-band
+    # absolute magnitudedso as to match the S colour dsitribuion. We could do it the other way round as we don't know which is right but either way removes the bias.
     #
     # If we use these resulting colours to construct the lookup table to convert observed g-r and redshift to rest frame G-R then these will be debiased.
     # There is no need appply any magnitude shifts to the observed quanitites.
     # We should then compute k-corrections using data binned by this restframe colour and using the debiased FSF absolute ma
 
+
+    print('Plots for individual redshift slices')
+    for zbin in np.linspace(0.0,0.5,5):
+        
+        # Compare the revised N/S distributions of rest frame colour
+        mask=(fsf['PHOTSYS']=='N') & (fsf['Z']>zbin) &  (fsf['Z']<zbin+0.1)
+        nhist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=500)
+        binwidth=bins[1]-bins[0]
+        binc=bins[1:]-0.5*binwidth
+        nhist=nhist/(binwidth*mask.sum()) # normalize
+        mask=(fsf['PHOTSYS']=='S') & (fsf['Z']>zbin) &  (fsf['Z']<zbin+0.1)
+        shist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=bins)
+        shist=nhist/(binwidth*mask.sum()) # normalize
+
+        plt.plot(binc,shist,label='S z='+str(zbin))
+        plt.plot(binc,nhist,label='N z='+str(zbin))
+        plt.legend()
+        plt.ylim([0.0,3.5])
+        plt.xlim([-0.25,1.25])
+        plt.xlabel('G-R')
+        plt.ylabel('P(G-R)')
+        plt.show()
+    
+
     
     # Compare the N/S distributions of rest frame colour
-    mask=(fsf['PHOTSYS']=='S')
-    shist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=5000)
+    mask=(fsf['PHOTSYS']=='N')
+    nhist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=5000)
     binwidth=bins[1]-bins[0]
     binc=bins[1:]-0.5*binwidth
-    shist=shist/(binwidth*mask.sum()) # normalize
-    mask=(fsf['PHOTSYS']=='N')
-    nhist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=bins)
     nhist=nhist/(binwidth*mask.sum()) # normalize
+    mask=(fsf['PHOTSYS']=='S')
+    shist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=bins)
+    shist=shist/(binwidth*mask.sum()) # normalize
 
     plt.plot(binc,shist,label='S')
     plt.plot(binc,nhist,label='N')
@@ -1788,10 +1848,10 @@ def remapfsf_rmags(fsf):
     plt.ylabel('P(<(G-R))')
     plt.show()
         
-    # For a given S G-R find the N G-R that has the same cumulative probability
-    mask=(fsf['PHOTSYS']=='S')
-    cprob=np.interp(fsf['REST_GMR_0P1'][mask],binc,scum) # find cumulative probability from the N distribution
-    newcol=np.interp(cprob,ncum,binc) # find colour corresponding to the N cumulative probability
+    # For a given N G-R find the S G-R that has the same cumulative probability
+    mask=(fsf['PHOTSYS']=='N')
+    cprob=np.interp(fsf['REST_GMR_0P1'][mask],binc,ncum) # find cumulative probability from the N distribution
+    newcol=np.interp(cprob,scum,binc) # find colour corresponding to the N cumulative probability
     
     # Use this colour to define a new r-band magnitude that will produce the required colour
     # and update both the colour and derived k correction to match
@@ -1804,14 +1864,14 @@ def remapfsf_rmags(fsf):
     fsf['KR_DERIVED'][mask]  = fsf['RMAG_DRED'][mask] - fsf['DISTMOD'][mask] - fsf['ABSMAG01_SDSS_R'][mask] 
     
     # Replot overall and in redshift bins
-    mask=(fsf['PHOTSYS']=='S')
+    mask=(fsf['PHOTSYS']=='N')
     shist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=500)
     binwidth=bins[1]-bins[0]
     binc=bins[1:]-0.5*binwidth
+    nhist=shist/(binwidth*mask.sum()) # normalize
+    mask=(fsf['PHOTSYS']=='S')
+    shist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=bins)
     shist=shist/(binwidth*mask.sum()) # normalize
-    mask=(fsf['PHOTSYS']=='N')
-    nhist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=bins)
-    nhist=nhist/(binwidth*mask.sum()) # normalize
 
     plt.plot(binc,shist,label='S')
     plt.plot(binc,nhist,label='N')
@@ -1823,18 +1883,18 @@ def remapfsf_rmags(fsf):
     plt.show()
 
 
-    print('Plots for individual redshift slices')
+    print('Plots for individual redshift slices after debiasing')
     for zbin in np.linspace(0.0,0.5,5):
         
         # Compare the revised N/S distributions of rest frame colour
-        mask=(fsf['PHOTSYS']=='S') & (fsf['Z']>zbin) &  (fsf['Z']<zbin+0.1)
-        shist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=500)
+        mask=(fsf['PHOTSYS']=='N') & (fsf['Z']>zbin) &  (fsf['Z']<zbin+0.1)
+        nhist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=500)
         binwidth=bins[1]-bins[0]
         binc=bins[1:]-0.5*binwidth
-        shist=shist/(binwidth*mask.sum()) # normalize
-        mask=(fsf['PHOTSYS']=='N') & (fsf['Z']>zbin) &  (fsf['Z']<zbin+0.1)
-        nhist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=bins)
         nhist=nhist/(binwidth*mask.sum()) # normalize
+        mask=(fsf['PHOTSYS']=='S') & (fsf['Z']>zbin) &  (fsf['Z']<zbin+0.1)
+        shist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=bins)
+        shist=nhist/(binwidth*mask.sum()) # normalize
 
         plt.plot(binc,shist,label='S z='+str(zbin))
         plt.plot(binc,nhist,label='N z='+str(zbin))
@@ -1848,52 +1908,13 @@ def remapfsf_rmags(fsf):
     return fsf
 
 
-
-def  load_full_catalogue_subsets(fullfile):
-    """depracated"""    
-    zmin = 0.0  # Should be the minimum redshift cut used in making the clustering catalogue and should probably be set to exlcude stars i.e. 0.00125 or so
-    full = Table.read(fullfile)
-    
-    # Compute magnitudes and fibre magnitudes and add to the full table
-    full.add_column(Column(name='rmag', data=22.5-2.5*np.log10(full['FLUX_R']/full['MW_TRANSMISSION_R']) ))
-    full.add_column(Column(name='fib_rmag', data=22.5-2.5*np.log10(full['FIBERFLUX_R']/full['MW_TRANSMISSION_R']) ))
-    print('Size of Full catalogue',full['rmag'].size)
-
-    #Throw away objects with fibre mag>23 as they should not be in BGS but this because the photometry changed and we should keep them
-    #full = full[(full['fib_rmag']<23.0)] 
-    #print('size of Full catalogue if limited to r_fib<23 cut',full['rmag'].size)
-    print('Faintest Fibre mag:',np.amax(full['fib_rmag']),'NB BGS was limited to r_fib=23 in an earlier version of the photometry')
-
-
-    #The observed subset is defined by those reachable by a fibre (ZWARN not Nan) that isn't broken (ZWARN=999999) that achieves a GOODHARDLOC and is predicted to yield decent SNR
-    mask = (full['ZWARN']*0 == 0) & (full['ZWARN'] != 999999) & (full['GOODHARDLOC'] == 1)  & (full['TSNR2_BGS']>1000.0)
-    #From the observed subset we ideally want to remove all stars but settle for removing just the spectroscopically confirmed stars
-    mask = ~mask  | (full['Z_not4clus']<zmin) #true for all the unobserved (~mask) and all the observed that are stars (z<zmin)
-    mask = ~mask  # now false for the above, i.e. true for all observed that aren't spectroscopically confirmed to be z<zmin (stars)
-    observed=full[mask]
-    #The subset of galaxies with good redshift have no ZWARN have large DELTACHI2 and are above zmin (i.e. not stars)
-    mask_zgood =(observed['DELTACHI2'] > 40) & (observed['ZWARN'] == 0) & (observed['Z_not4clus']>zmin)
-    zgood=observed[mask_zgood]
-    
-    #zgood.info('stats')
-    print('number of objects in the observed subset',  observed['TARGETID'].size)
-    print('number of objects in the good redshift subset',zgood['TARGETID'].size)
-    #observed.info('stats')
-    print('Faintest Observed Fibre mag:',np.amax(observed['fib_rmag']))
-    
-    
-    return zgood, observed
-
-
-
-# extract a subset of the data based on redshift limits and update the zmin,zmax and vmax accordingly
 def redhsift_slice(dat,zmin_sub,zmax_sub):
-    """depracated"""  
+    """Extract a subset of the data based on redshift limits and update the zmin,zmax and vmax accordingly"""  
     submask= (dat['Z']>zmin_sub) & (dat['Z']<zmax_sub)
     datsub=dat[submask]
     datsub['zmax'][datsub['zmax']>zmax_sub]=zmax_sub #limit zmax to that of the subsample
     datsub['zmin'][datsub['zmin']<zmin_sub]=zmin_sub #limit zmin to that of the subsample
-    # Scale vmax to account for chnages to zmin and zmax
+    # Scale vmax to account for changes to zmin and zmax
     datsub['vmax']=dat['vmax'][submask]*    ( (cosmo.comoving_distance(datsub['zmax']).value)**3 -(cosmo.comoving_distance(datsub['zmin']).value)**3 ) \
                       /    ( (cosmo.comoving_distance(dat['zmax'][submask]).value)**3 -(cosmo.comoving_distance(dat['zmin'][submask]).value)**3 )
     return datsub
@@ -1902,7 +1923,7 @@ def redhsift_slice(dat,zmin_sub,zmax_sub):
 
 
 def plot_sizes(dat,regions):
-    """depracated"""  
+    """Plot the distribution of gakaxies sizes"""  
     bins = np.arange(0, 40.0, 1.0)
     bin_cen=(bins[:-1] + bins[1:]) / 2.0
     for reg in regions:
@@ -1919,8 +1940,11 @@ def plot_sizes(dat,regions):
     plt.show()
     return
 
+
+
+
 def plot_depths(dat,regions):
-    """depracated"""  
+    """Plot the distribution of photometric depth"""  
     eps=1.0e-10
     psfmagdepth=22.5-2.5*np.log10(5.0/(eps+np.sqrt(dat['PSFDEPTH_R'])))
     galmagdepth=22.5-2.5*np.log10(5.0/(eps+np.sqrt(dat['GALDEPTH_R'])))
