@@ -10,6 +10,9 @@ from astropy.cosmology import FlatLambdaCDM
 from scipy.ndimage import gaussian_filter
 from desiutil.plots import prepare_data, init_sky, plot_grid_map, plot_healpix_map, plot_sky_circles, plot_sky_binned
 cosmo = FlatLambdaCDM(H0=100, Om0=0.313, Tcmb0=2.725)   #Standard Planck Cosmology in Mpc/h units
+import warnings
+warnings.filterwarnings('ignore', module='astropy.io.fits')
+
 
 
 
@@ -19,7 +22,7 @@ cosmo = FlatLambdaCDM(H0=100, Om0=0.313, Tcmb0=2.725)   #Standard Planck Cosmolo
 #and other "global" variables so they can be defined in any routine
 def selection(reg):
     """sets up the selection cuts for each region so that a consistent set can be used everywhere"""
-    f_ran=0.02 #Random down sampling factor
+    f_ran=0.02 #random sampling fraction
     Qevol=0.78 #0.78 #Assumed luminosity evolution parameter
     area_N_Y1=2393.4228/(4*np.pi*(180.0/np.pi)**2)
     area_S_Y1=5358.2728/(4*np.pi*(180.0/np.pi)**2)
@@ -239,7 +242,7 @@ def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
         plt.xlim(0.0,0.6)
         plt.xlabel('$z$')
         plt.ylabel('$M_r$')
-        plt.legend()
+        plt.legend(loc='upper right')
         plt.show()
 
     
@@ -260,7 +263,7 @@ def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
          plt.xlim(0.0,0.6)
          plt.xlabel('$z$')
          plt.ylabel('$M_r$')
-         plt.legend()
+         #plt.legend()
          plt.show()
     # plot histogram of the number of objects in each bin overall and in volume limited subset
     plt.hist(dat['Z'],bins=zbin_edges,label='All',alpha=0.5)
@@ -462,7 +465,7 @@ def compute_zmax_vmax(dat,regions):
         #set up k-corrections for region
         kcorr_r  = DESI_KCorrection(band='R', file='jmext', photsys=reg) #set k-correction for region
         regmask=(dat['reg']==reg)#mask to select objects in specified region
-        mask = regmask & (dat['rmag']>Sel['bright']) & (dat['rmag']<Sel['faint']) # in region and between faint and bright apparent magnitude cuts
+        mask = regmask # At one time we also limited by bright and faint magnitude limit but that is now done at the start of the pipeline
         print('Sample size in this region and between faint and bright apparent magnitude limits:',mask.sum())
         
         magdiff_target=Sel['faint']-dat['ABSMAG_RP1']
@@ -490,7 +493,10 @@ def compute_zmax_vmax(dat,regions):
         #Apply selection bounds and compute v and vmax
         print('applying selection limits and computing vmax (vmax-vmin) and v (v-vmin) but also vmin')
         if ((zmax[regmask].max()>Sel['zmax']).any()): print('Error: Some zmax values greater than sample zmax cut')
-        if ((zmin[regmask].min()<Sel['zmin']).any()): print('Error: Some zmin values less than sample zmin cut')
+        if ((zmin[regmask].min()<Sel['zmin']).any()): 
+            print('Error: Some zmin values less than sample zmin cut')
+            pmask= (zmin<Sel['zmin']) & regmask
+            print('Cases of zmin<',Sel['zmin'],zmin[pmask]) 
         v[regmask]=Sel['area']*(4.0*np.pi/3.0)*\
         ( (cosmo.comoving_distance(dat['Z'][regmask]).value)**3 -(cosmo.comoving_distance(zmin[regmask]).value)**3 )
         
@@ -980,7 +986,7 @@ def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot
                #print("ijack",ijack,'jjack',jjack)
                jkmask= (dat["ijack"]!=ijack) & mask  # exlcude one region
                phi_jack[jjack,:],binr=np.histogram(dat[bandmag][jkmask], bins=bins,  weights=weight[jkmask])
-               phi_jack[jjack,:]=phi_jack[jjack]*njack/(njack-1)  # rescale to account for the missing region 
+               phi_jack[jjack,:]=phi_jack[jjack,:]*njack/(njack-1)  # rescale to account for the missing region 
                log_phi_jack=np.log10(np.maximum(phi_jack[jjack,:],eps))
                #plt.plot(bin_cen,log_phi_jack) # plot each jackknife estimate in turn
            phi_mean=np.mean(phi_jack,axis=0) #compute the mean over the jackknife samples
@@ -1688,7 +1694,7 @@ def read_fsf(fpath):
 
     return fsf
 
-def remap_rmags(dat,colcut=0.8):
+def remap_rmags(dat,colcut=0.8,plot=True):
     """Remove bias between N and S bright red galaxy magnitudes"""
     # Compare the N/S distributions of absolute magnitude for red galaxies
     smask=(dat['PHOTSYS']=='S') & (dat['REST_GMR_0P1']>colcut)
@@ -1727,6 +1733,32 @@ def remap_rmags(dat,colcut=0.8):
     
     # Use this absmag to define a new r-band absolute magnitude that will produce the required absolute magnitude
     magdiff=dat['ABSMAG_RP1'][smask]-newabsmag 
+    magdiff_max=np.amax(magdiff)
+    magdiff_min=np.amin(magdiff)
+    print('Maximum and minimum magnitude difference substracted from S to debias photometry:',magdiff_max,magdiff_min)
+    if (plot):
+        print('Show mag shifts including those that are capped.')
+        plt.scatter(magdiff,newabsmag+magdiff,color='black',marker=',',lw=0,s=1,alpha=0.01,label='-0.35<$\Delta M_r>0.0$')
+        # Extreme positive values
+        emask=(magdiff>0.0)
+        plt.scatter(magdiff[emask],newabsmag[emask]+magdiff[emask],marker=',',lw=0,s=1,alpha=0.01,color='blue',label='$\Delta M_r>0$')
+        #print('extreme positive(magdiff,newabsmag):',magdiff[emask],newabsmag[emask])
+         # Extreme negative values
+        emask=(magdiff<-0.35)
+        #print('extreme negative(magdiff,newabsmag):',magdiff[emask],newabsmag[emask])
+        plt.scatter(magdiff[emask],newabsmag[emask]+magdiff[emask],marker=',',lw=0,s=1,alpha=0.01,color='red',label='$\Delta M_r<-0.35$')
+        plt.ylabel('Original $M_r$')
+        plt.xlabel('$\Delta M_r$')
+        plt.legend()
+        plt.show()
+    #
+    #Cap the extreme values
+    #Capping at -0.35 has no effect as there aren't any that extreme
+    #Capping at 0 is essentially the same as not correcting galaxies fainter than -19.5 (it is better than an explicit magnitude cut as it avoids any offset at the join)
+    magdiff=np.clip(magdiff,-0.35,0.0) #avoid bizzare extreme values
+    magdiff_max=np.amax(magdiff)
+    magdiff_min=np.amin(magdiff)
+    print('After clipping: Maximum and minimum magnitude difference substracted from S to debias photometry:',magdiff_max,magdiff_min)
     plt.hist(magdiff,bins=100)
     plt.xlabel('$\Delta M_r$')
     plt.show()
@@ -1737,7 +1769,7 @@ def remap_rmags(dat,colcut=0.8):
     print('**Should also update apparent magnitudes and fluxes in other bands if they are to be used')
    
     
-    # Replot overall and in redshift bins
+    # Replot overall
     shist,bins=np.histogram(dat['ABSMAG_RP1'][smask], bins=500)
     binwidth=bins[1]-bins[0]
     binc=bins[1:]-0.5*binwidth
@@ -1754,9 +1786,9 @@ def remap_rmags(dat,colcut=0.8):
     plt.ylabel('P(G-R)')
     plt.show()
 
-
-    print('Plots for individual redshift slices')
-    for zbin in np.linspace(0.0,0.5,5):
+    if (plot):
+      print('Plots for individual redshift slices')
+      for zbin in np.linspace(0.0,0.5,5):
         
         # Compare the revised N/S distributions of rest frame colour
         mask=smask & (dat['Z']>zbin) &  (dat['Z']<zbin+0.1)
@@ -1779,7 +1811,7 @@ def remap_rmags(dat,colcut=0.8):
     
     return dat
 
-def remapfsf_rmags(fsf):
+def remapfsf_rmags(fsf,plot=True):
   
     """Remap FSF resframe colour and absolute magnitude to remove the bias between the N and S restframe colour distribution"""
     #For the North map the R magnitudes (absolute and apparent) to change the absolute magnitude distribution to agree with he South
@@ -1792,9 +1824,9 @@ def remapfsf_rmags(fsf):
     # There is no need appply any magnitude shifts to the observed quanitites.
     # We should then compute k-corrections using data binned by this restframe colour and using the debiased FSF absolute ma
 
-
-    print('Plots for individual redshift slices')
-    for zbin in np.linspace(0.0,0.5,5):
+    if (plot):
+      print('Plots for individual redshift slices')
+      for zbin in np.linspace(0.0,0.5,5):
         
         # Compare the revised N/S distributions of rest frame colour
         mask=(fsf['PHOTSYS']=='N') & (fsf['Z']>zbin) &  (fsf['Z']<zbin+0.1)
@@ -1804,10 +1836,11 @@ def remapfsf_rmags(fsf):
         nhist=nhist/(binwidth*mask.sum()) # normalize
         mask=(fsf['PHOTSYS']=='S') & (fsf['Z']>zbin) &  (fsf['Z']<zbin+0.1)
         shist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=bins)
-        shist=nhist/(binwidth*mask.sum()) # normalize
+        shist=shist/(binwidth*mask.sum()) # normalize
+        
 
-        plt.plot(binc,shist,label='S z='+str(zbin))
-        plt.plot(binc,nhist,label='N z='+str(zbin))
+        plt.plot(binc,shist,label='S z='+str(zbin)+' to '+str(zbin+0.1),color='red')
+        plt.plot(binc,nhist,label='N z='+str(zbin)+' to '+str(zbin+0.1),color='blue')
         plt.legend()
         plt.ylim([0.0,3.5])
         plt.xlim([-0.25,1.25])
@@ -1863,12 +1896,12 @@ def remapfsf_rmags(fsf):
     fsf['REST_GMR_0P1'][mask]=fsf['ABSMAG01_SDSS_G'][mask]-fsf['ABSMAG01_SDSS_R'][mask]
     fsf['KR_DERIVED'][mask]  = fsf['RMAG_DRED'][mask] - fsf['DISTMOD'][mask] - fsf['ABSMAG01_SDSS_R'][mask] 
     
-    # Replot overall and in redshift bins
+    # Replot overall 
     mask=(fsf['PHOTSYS']=='N')
-    shist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=500)
+    nhist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=500)
     binwidth=bins[1]-bins[0]
     binc=bins[1:]-0.5*binwidth
-    nhist=shist/(binwidth*mask.sum()) # normalize
+    nhist=nhist/(binwidth*mask.sum()) # normalize
     mask=(fsf['PHOTSYS']=='S')
     shist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=bins)
     shist=shist/(binwidth*mask.sum()) # normalize
@@ -1883,8 +1916,9 @@ def remapfsf_rmags(fsf):
     plt.show()
 
 
-    print('Plots for individual redshift slices after debiasing')
-    for zbin in np.linspace(0.0,0.5,5):
+    if (plot):
+      print('Plots for individual redshift slices after debiasing')
+      for zbin in np.linspace(0.0,0.5,5):
         
         # Compare the revised N/S distributions of rest frame colour
         mask=(fsf['PHOTSYS']=='N') & (fsf['Z']>zbin) &  (fsf['Z']<zbin+0.1)
@@ -1894,10 +1928,10 @@ def remapfsf_rmags(fsf):
         nhist=nhist/(binwidth*mask.sum()) # normalize
         mask=(fsf['PHOTSYS']=='S') & (fsf['Z']>zbin) &  (fsf['Z']<zbin+0.1)
         shist,bins=np.histogram(fsf['REST_GMR_0P1'][mask], bins=bins)
-        shist=nhist/(binwidth*mask.sum()) # normalize
+        shist=shist/(binwidth*mask.sum()) # normalize
 
-        plt.plot(binc,shist,label='S z='+str(zbin))
-        plt.plot(binc,nhist,label='N z='+str(zbin))
+        plt.plot(binc,shist,label='S z='+str(zbin)+' to '+str(zbin+0.1),color='red')
+        plt.plot(binc,nhist,label='N z='+str(zbin)+' to '+str(zbin+0.1),color='blue')
         plt.legend()
         plt.ylim([0.0,3.5])
         plt.xlim([-0.25,1.25])
@@ -1964,3 +1998,41 @@ def plot_depths(dat,regions):
     plt.legend()
     plt.show()
     return
+
+
+def plot_dndz(dat,regions):
+    """Plot dn/dz with jackknife errors"""
+    for reg in regions:
+        Sel=selection(reg) # define selection parameters for this region
+        regmask = (dat['reg']==reg)
+        weights=dat['WEIGHT']/Sel['f_ran']
+        # A weighted histogram using the combined systematics and completeness weight  
+        dndz,binz=np.histogram(dat['Z'][regmask], bins=100,  weights=weights[regmask])
+        dz=binz[1]-binz[0] #redshift bin width
+        dndz= (dndz/dz)/(Sel['area']*(4*np.pi*(180.0/np.pi)**2))   # rescale by area in sq deg and bin width 
+        # compute jackknife errors if jackknife indices exist
+        njack=1+np.max(dat["ijack"][regmask])-np.min(dat["ijack"][regmask]) #number of jackknife samples
+        print('number of jackknife samples:',njack,' for region:',reg," in range:",np.min(dat["ijack"][regmask]),np.max(dat["ijack"][regmask]))
+        dndz_jack=np.zeros((njack,dndz.size),dtype=float)# array in which to store all the jackknife estimates
+        if (njack>1):  #Only do jackknife errors if we have jackknife indices otherwise default to Poisson errors
+           for ijack in range(np.min(dat["ijack"][regmask]), np.max(dat["ijack"][regmask]) + 1):
+               jjack=ijack-np.min(dat["ijack"][regmask]) #offset index so this region starts at zero
+               jkmask= (dat["ijack"]!=ijack) & regmask  # exlcude one region
+               dndz_jack[jjack,:],binz=np.histogram(dat['Z'][jkmask], bins=binz,  weights=weights[jkmask])
+               dndz_jack[jjack,:]=(dndz_jack[jjack,:]/dz)*(njack/(njack-1))/(Sel['area']*(4*np.pi*(180.0/np.pi)**2))   # rescale to account for the missing region and area in sq deg and bin width          
+           dndz_mean=np.mean(dndz_jack,axis=0) #compute the mean over the jackknife samples
+           dndz_err=np.std(dndz_jack,axis=0)*np.sqrt(njack-1) # jackknife rescaling factor as np.std()'s default is ddof=0
+           dndz_low=dndz-dndz_err
+           dndz_hi =dndz+dndz_err
+           bin_cen= (binz[1:]+binz[:-1])/2.0
+           plt.fill_between(bin_cen,dndz_low,dndz_hi,color=Sel['col'],alpha=0.5,label=reg)
+    plt.ylabel('$dN_{sq deg}/dz$')        
+    plt.xlabel('$z$')        
+    plt.xlim(0.0,0.6) 
+    plt.ylim(0.0,3600.0)
+    plt.legend()
+    plt.show()        
+    return dndz,dndz_err,bin_cen
+
+
+    
