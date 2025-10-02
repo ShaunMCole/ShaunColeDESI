@@ -22,7 +22,7 @@ warnings.filterwarnings('ignore', module='astropy.io.fits')
 #and other "global" variables so they can be defined in any routine
 def selection(reg):
     """sets up the selection cuts for each region so that a consistent set can be used everywhere"""
-    f_ran=0.02 #random sampling fraction
+    f_ran=1.0 #random sampling fraction
     Qevol=0.78 #0.78 #Assumed luminosity evolution parameter
     area_N_Y1=2393.4228/(4*np.pi*(180.0/np.pi)**2)
     area_S_Y1=5358.2728/(4*np.pi*(180.0/np.pi)**2)
@@ -949,7 +949,7 @@ def cone_plot(dat,regions):
 
 #Plot 1/vmax Luminosity function
 #with different plotting options
-def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot=False, binwidth=0.25, ratio=False, Veff=False, Vollim=False):
+def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot=False, binwidth=0.25, ratio=False, Veff=False, Vollim=False, OverdensityCorrection=False):
     """1/Vmax LF estimator"""
     eps=1.0e-10 #used to avoid divide by zero
     bins = np.arange(-24.0, -11.1, binwidth)
@@ -965,12 +965,15 @@ def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot
         if Veff:
             print('Using Veff_max rather than Vmax in LF estimate.')
             weight[mask]=dat['WEIGHT'][mask]/(binwidth*dat['veff_max'][mask]*Sel['f_ran'])
+            phi,binr=np.histogram(dat[bandmag][mask], bins=bins,  weights=weight[mask])
         else:
             if (Vollim==0): #not a volume limited sample
                 weight[mask]=dat['WEIGHT'][mask]/(binwidth*dat['vmax'][mask]*Sel['f_ran'])
+                if(OverdensityCorrection): weight[mask]=weight[mask]/dat['overdensity'][mask]  # overdensity correction if selected
                 phi,binr=np.histogram(dat[bandmag][mask], bins=bins,  weights=weight[mask])
             else: #if this sample is volume limited with volume Vollim
                 weight[mask]=dat['WEIGHT'][mask]/(binwidth*dat['vollim'][mask]*Sel['f_ran'])
+                if(OverdensityCorrection): weight[mask]=weight[mask]/dat['overdensity'][mask]  # overdensity correction if selected
                 phi,binr=np.histogram(dat[bandmag][mask], bins=bins,  weights=weight[mask])
         
         log_phi=np.log10(np.maximum(phi,eps))
