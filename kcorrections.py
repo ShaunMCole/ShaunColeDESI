@@ -413,7 +413,6 @@ def gen_kcorr(fsf, regions, colval='REST_GMR_0P1', nbins=10, write=False, rollin
 
             opath = './data/jmext_kcorr_{}_{}band_z01.dat'.format(photsys.upper(), band.lower())
 
-            #opath = '/global/u2/s/smcole/DESI/NvsS/data/jmext_kcorr_{}_{}band_z01.dat'.format(photsys.upper(), band.lower())
 
             
             
@@ -463,7 +462,7 @@ class DESI_KCorrection(object):
         """
         
         import os
-        os.environ['CODE_ROOT'] = '/global/u2/s/smcole/DESI/NvsS'
+        os.environ['CODE_ROOT'] = './'
         raw_dir = os.environ['CODE_ROOT'] + '/data/'        
         #print(os.environ['CODE_ROOT'])
         

@@ -946,9 +946,77 @@ def cone_plot(dat,regions):
     return
 
 
+#Estimate and plot a 2D (colour and magnitude) 1/Vmax Luminosity function
+def lumfun2D_vmax(dat,regions, bandmag='ABSMAG_RP1', colour="REST_GMR_0P1", band='R', plot=True, saveplot=False, binwidth=0.25, colbinwidth=0.02, Veff=False, Vollim=False, OverdensityCorrection=False):
+    """1/Vmax 2F LF estimator"""
+    eps=1.0e-10 #used to avoid divide by zero
+    mag_bins = np.arange(-24.5, -12.1, binwidth)
+    mag_cen = (mag_bins[:-1] + mag_bins[1:]) / 2.0
+    colbins= np.arange(0.0,1.5,colbinwidth)
+    col_cen =(colbins[:-1] + colbins[1:]) / 2.0
+    bins=(mag_bins,colbins)
+    for reg in regions:
+        Sel=selection(reg) # define selection parameters for this region
+        mask = (dat['reg']==reg)
+        # A weighted 2D histogram using the combined systematics and completeness weight and 1/Vmax
+        weight=np.copy(dat['WEIGHT'])# just to intialize 
+        if Veff:
+            print('Using Veff_max rather than Vmax in LF estimate.')
+            weight[mask]=dat['WEIGHT'][mask]/(colbinwidth*binwidth*dat['veff_max'][mask]*Sel['f_ran'])
+            phi,_,_=np.histogram2d(dat[bandmag][mask], dat[colour][mask], bins=bins,  weights=weight[mask])
+        else:
+            if (Vollim==0): #not a volume limited sample
+                weight[mask]=dat['WEIGHT'][mask]/(colbinwidth*binwidth*dat['vmax'][mask]*Sel['f_ran'])
+                if(OverdensityCorrection): weight[mask]=weight[mask]/dat['overdensity'][mask]  # overdensity correction if selected
+                phi,_,_=np.histogram2d(dat[bandmag][mask], dat[colour][mask], bins=bins,  weights=weight[mask])
+            else: #if this sample is volume limited with volume Vollim
+                weight[mask]=dat['WEIGHT'][mask]/(colbinwidth*binwidth*dat['vollim'][mask]*Sel['f_ran'])
+                if(OverdensityCorrection): weight[mask]=weight[mask]/dat['overdensity'][mask]  # overdensity correction if selected
+                phi,_,_=np.histogram2d(dat[bandmag][mask], dat[colour][mask], bins=bins,  weights=weight[mask])
+        
+        
 
-#Plot 1/vmax Luminosity function
-#with different plotting options
+
+
+        # compute jackknife errors if jackknife indices exist
+
+        njack=1+np.max(dat["ijack"][mask])-np.min(dat["ijack"][mask]) #number of jackknife samples
+        print('number of jackknife samples:',njack,' for region:',reg," in range:",np.min(dat["ijack"][mask]),np.max(dat["ijack"][mask]))
+        phi_jack=np.zeros((njack,mag_cen.size,col_cen.size),dtype=float)# array in which to store all the jackknife estimates
+        if (njack>1):  #Only do jackknife errors if we have jackknife indices otherwise default to Poisson errors
+           for ijack in range(np.min(dat["ijack"][mask]), np.max(dat["ijack"][mask]) + 1):
+               jjack=ijack-np.min(dat["ijack"][mask]) #offset index so this region starts at zero
+               jkmask= (dat["ijack"]!=ijack) & mask  # exlcude one region
+               phi_jack[jjack,:,:],_,_=np.histogram2d(dat[bandmag][jkmask], dat[colour][jkmask], bins=bins,  weights=weight[jkmask])
+               phi_jack[jjack,:,:]=phi_jack[jjack,:,:]*njack/(njack-1)  # rescale to account for the missing region
+           phi_mean=np.mean(phi_jack,axis=0) #compute the mean over the jackknife samples
+           phi_err=np.std(phi_jack,axis=0)*np.sqrt(njack-1)  # jackknife rescaling factor as np.std()'s default is ddof=0
+           phi_jack=phi_mean,
+           phi_low=phi-phi_err
+           phi_hi=phi+phi_err
+           
+            
+        else:
+           print("Estimating Poisson Errors as Jackknife indices not set")
+           weight=weight**2 # For Poisson error= sqrt(Sum w^2)
+           phi_err,_=np.histogram2d(dat[bandmag][mask], dat[colour][mask], bins=bins,  weights=weight[mask])
+           phi_err=np.sqrt(phi_err)
+           phi_low= phi-phi_err
+           phi_hi=phi+phi_err
+
+    
+    if plot:
+        plt.imshow(np.log10(phi), interpolation='none',vmin=-6.0,aspect='auto',extent=(colbins[0],colbins[-1],mag_bins[-1],mag_bins[0]))
+        plt.ylabel('$M_r - 5 log h$')
+        plt.xlabel('rest frame $G-R$')
+        plt.colorbar(orientation='vertical')
+        plt.show()
+
+    del weight,phi_err #tidy up
+    return phi,phi_low,phi_hi,mag_cen,col_cen   # return the LF and error band of the estimate from the last region
+            
+
+#Estimate and plot (with different plotting options) 1/vmax Luminosity function
 def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot=False, binwidth=0.25, ratio=False, Veff=False, Vollim=False, OverdensityCorrection=False):
     """1/Vmax LF estimator"""
     eps=1.0e-10 #used to avoid divide by zero
