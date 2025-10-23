@@ -10,6 +10,7 @@ from astropy.cosmology import FlatLambdaCDM
 from scipy.ndimage import gaussian_filter
 from desiutil.plots import prepare_data, init_sky, plot_grid_map, plot_healpix_map, plot_sky_circles, plot_sky_binned
 cosmo = FlatLambdaCDM(H0=100, Om0=0.313, Tcmb0=2.725)   #Standard Planck Cosmology in Mpc/h units
+
 import warnings
 warnings.filterwarnings('ignore', module='astropy.io.fits')
 
@@ -22,7 +23,7 @@ warnings.filterwarnings('ignore', module='astropy.io.fits')
 #and other "global" variables so they can be defined in any routine
 def selection(reg):
     """sets up the selection cuts for each region so that a consistent set can be used everywhere"""
-    f_ran=1.0 #random sampling fraction
+    f_ran=0.05 #random sampling fraction
     Qevol=0.78 #0.78 #Assumed luminosity evolution parameter
     area_N_Y1=2393.4228/(4*np.pi*(180.0/np.pi)**2)
     area_S_Y1=5358.2728/(4*np.pi*(180.0/np.pi)**2)
@@ -30,7 +31,7 @@ def selection(reg):
     area_S_Y3=8527.58/(4*np.pi*(180.0/np.pi)**2)
     South={'zmin': 0.002, 'zmax': 0.6, 'bright': 10.0, 'faint': 19.5 ,\
           'area': area_S_Y3, 'col': 'red' , 'style': 'solid', 'f_ran': f_ran, 'Qevol': Qevol}
-    North={'zmin': 0.002, 'zmax': 0.6, 'bright': 10.0, 'faint': 19.54,\
+    North={'zmin': 0.002, 'zmax': 0.6, 'bright': 10.0, 'faint': 19.5,\
           'area': area_N_Y3, 'col': 'blue', 'style': 'dashed', 'f_ran': f_ran, 'Qevol': Qevol}
     if (reg=='N'):
         x=North
@@ -237,8 +238,8 @@ def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
         #loop over the redshift bins
         for jzbin in range(0,nzslices):  
             print('Number in volume limited sample:',jzbin,' with limits:',zbin_edges[jzbin],'<z<',zbin_edges[jzbin+1],'N=',((dat['izbin']==jzbin) & vlmask).sum())
-        plt.scatter(dat['Z'][rmask],dat['ABSMAG_RP1'][rmask],marker=',',lw=0,s=1,c=10-dat['izbin'][rmask],cmap='inferno',label=reg)
-        plt.scatter(dat['Z'][vlrmask],dat['ABSMAG_RP1'][vlrmask],marker=',',lw=0,s=1,c=dat['izbin'][vlrmask],cmap='jet')
+        plt.scatter(dat['Z'][rmask],dat['ABSMAG_RP1'][rmask],marker=',',lw=0,s=0.1,c=10-dat['izbin'][rmask],cmap='inferno',label=reg)
+        plt.scatter(dat['Z'][vlrmask],dat['ABSMAG_RP1'][vlrmask],marker=',',lw=0,s=0.1,c=dat['izbin'][vlrmask],cmap='jet')
         plt.xlim(0.0,0.6)
         plt.xlabel('$z$')
         plt.ylabel('$M_r$')
@@ -416,10 +417,14 @@ def ABSMAG(appmag,z,rest_GMR,kcorr_r,Qevol):
         return ABSMAG
     
 # Make plots of the k-corrections to check they are sensible and smooth in both redshift and colour
-def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True):
+def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True, forceN=False):
     """Assign restframe colours from g-r vs redshift lookup table and ABSMAG using k-correction polynomials"""
     for reg in regions:
-      print('Computing restframe colours for region ',reg)
+      if forceN: 
+          lookupreg = 'N'
+      else:
+          lookupreg = 'S'
+      print('Computing restframe colours for region ',reg, 'using lookup for region ',lookupreg )
       Sel=selection(reg) # define selection parameters for this region
       regmask=(dat['reg']==reg)#mask to select objects in specified region
 
@@ -429,11 +434,11 @@ def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True):
       else: 
           print('using precomputed k-corrections')         
           
-      # call to use the lookup table to assign rest-frame colours                       
-      k.colour_table_lookup(dat, regmask, reg, replot=plot, fresh=False) 
+      # call to use the lookup table to assign rest-frame colours     
+      k.colour_table_lookup(dat, regmask, lookupreg, replot=plot, fresh=False) 
 
       # call to assign k-corrected magnitudes  
-      kcorr_rM  = DESI_KCorrection(band='R', file='jmext', photsys=reg) #set k-correction for region
+      kcorr_rM  = DESI_KCorrection(band='R', file='jmext', photsys=lookupreg) #set k-correction for region
       dat['ABSMAG_RP1'][regmask]=ABSMAG(dat['rmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qevol'])
 
 
@@ -442,7 +447,7 @@ def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True):
 
 
 #Compute zmax,zmin and along with v and vmax add to the data table    
-def compute_zmax_vmax(dat,regions):
+def compute_zmax_vmax(dat,regions,forceN=False):
     """Compute vmax and vmin using k-correction polynomials """
     # We want to solve
     # appmag=ABSMAG_R+ DMOD  +kcorr_r.k(z, rest_GMR) -Qevol*(z-0.1) = maglimit [19.5 for BSG S]
@@ -463,7 +468,11 @@ def compute_zmax_vmax(dat,regions):
         print('starting region ',reg)
         Sel=selection(reg) # define selection parameters for this region
         #set up k-corrections for region
-        kcorr_r  = DESI_KCorrection(band='R', file='jmext', photsys=reg) #set k-correction for region
+        if forceN: 
+            lookupreg='N'
+        else:
+            lookupreg=reg
+        kcorr_r  = DESI_KCorrection(band='R', file='jmext', photsys=lookupreg) #set k-correction for region
         regmask=(dat['reg']==reg)#mask to select objects in specified region
         mask = regmask # At one time we also limited by bright and faint magnitude limit but that is now done at the start of the pipeline
         print('Sample size in this region and between faint and bright apparent magnitude limits:',mask.sum())
@@ -492,7 +501,10 @@ def compute_zmax_vmax(dat,regions):
 
         #Apply selection bounds and compute v and vmax
         print('applying selection limits and computing vmax (vmax-vmin) and v (v-vmin) but also vmin')
-        if ((zmax[regmask].max()>Sel['zmax']).any()): print('Error: Some zmax values greater than sample zmax cut')
+        if ((zmax[regmask].max()>Sel['zmax']).any()): 
+            print('Error: Some zmax values greater than sample zmax cut')
+            pmask= (zmax>Sel['zmax']) & regmask
+            print('Cases of zmax>',Sel['zmax'],zmax[pmask]) 
         if ((zmin[regmask].min()<Sel['zmin']).any()): 
             print('Error: Some zmin values less than sample zmin cut')
             pmask= (zmin<Sel['zmin']) & regmask
@@ -612,7 +624,7 @@ def hist_nz(dat,ran,regions):
     bin_cen=(bins[:-1] + bins[1:]) / 2.0
     for reg in regions:
         Sel=selection(reg) # define selection parameters for this region
-        kcorr_r  = DESI_KCorrection(band='R', file='jmext', photsys=reg) #set k-correction for region
+        #kcorr_r  = DESI_KCorrection(band='R', file='jmext', photsys=reg) #set k-correction for region
         regmask=(dat['reg']==reg)#mask to select objects in specified region    
         mask = (regmask) & (dat['Z'] > Sel['zmin']) & (dat['rmag'] < Sel['faint']) & (dat['Z'] < Sel['zmax']) & (dat['rmag'] > Sel['bright']) #sample selection
         wcount,binz=np.histogram(dat[mask]['Z'], bins=bins,  density=True, weights=dat[mask]['WEIGHT'])
@@ -622,7 +634,7 @@ def hist_nz(dat,ran,regions):
     #Repeat for the randoms             
     for reg in regions:
         Sel=selection(reg) # define selection parameters for this region
-        kcorr_r  = DESI_KCorrection(band='R', file='jmext', photsys=reg) #set k-correction for region
+        #kcorr_r  = DESI_KCorrection(band='R', file='jmext', photsys=reg) #set k-correction for region
         regmask=(ran['reg']==reg)#mask to select objects in specified region    
         mask = (regmask) & (ran['Z'] > Sel['zmin']) & (ran['rmag'] < Sel['faint']) & (ran['Z'] < Sel['zmax']) & (ran['rmag'] > Sel['bright']) #sample selection
         wcount,binz=np.histogram(ran[mask]['Z'], bins=bins,  density=True, weights=ran[mask]['WEIGHT'])
@@ -955,24 +967,27 @@ def lumfun2D_vmax(dat,regions, bandmag='ABSMAG_RP1', colour="REST_GMR_0P1", band
     colbins= np.arange(0.0,1.5,colbinwidth)
     col_cen =(colbins[:-1] + colbins[1:]) / 2.0
     bins=(mag_bins,colbins)
+    
+    
     for reg in regions:
         Sel=selection(reg) # define selection parameters for this region
         mask = (dat['reg']==reg)
+        dat_col=dat[colour][mask] #np.clip(dat[colour][mask],a_min=colbins[0],a_max=colbins[-1]) # clip the data values so none fall outside the binned range
         # A weighted 2D histogram using the combined systematics and completeness weight and 1/Vmax
         weight=np.copy(dat['WEIGHT'])# just to intialize 
         if Veff:
             print('Using Veff_max rather than Vmax in LF estimate.')
             weight[mask]=dat['WEIGHT'][mask]/(colbinwidth*binwidth*dat['veff_max'][mask]*Sel['f_ran'])
-            phi,_,_=np.histogram2d(dat[bandmag][mask], dat[colour][mask], bins=bins,  weights=weight[mask])
+            phi,_,_=np.histogram2d(dat[bandmag][mask], dat_col, bins=bins,  weights=weight[mask])
         else:
             if (Vollim==0): #not a volume limited sample
                 weight[mask]=dat['WEIGHT'][mask]/(colbinwidth*binwidth*dat['vmax'][mask]*Sel['f_ran'])
                 if(OverdensityCorrection): weight[mask]=weight[mask]/dat['overdensity'][mask]  # overdensity correction if selected
-                phi,_,_=np.histogram2d(dat[bandmag][mask], dat[colour][mask], bins=bins,  weights=weight[mask])
+                phi,_,_=np.histogram2d(dat[bandmag][mask], dat_col, bins=bins,  weights=weight[mask])
             else: #if this sample is volume limited with volume Vollim
                 weight[mask]=dat['WEIGHT'][mask]/(colbinwidth*binwidth*dat['vollim'][mask]*Sel['f_ran'])
                 if(OverdensityCorrection): weight[mask]=weight[mask]/dat['overdensity'][mask]  # overdensity correction if selected
-                phi,_,_=np.histogram2d(dat[bandmag][mask], dat[colour][mask], bins=bins,  weights=weight[mask])
+                phi,_,_=np.histogram2d(dat[bandmag][mask], dat_col, bins=bins,  weights=weight[mask])
         
         
 
@@ -1020,7 +1035,7 @@ def lumfun2D_vmax(dat,regions, bandmag='ABSMAG_RP1', colour="REST_GMR_0P1", band
 def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot=False, binwidth=0.25, ratio=False, Veff=False, Vollim=False, OverdensityCorrection=False):
     """1/Vmax LF estimator"""
     eps=1.0e-10 #used to avoid divide by zero
-    bins = np.arange(-24.0, -11.1, binwidth)
+    bins = np.arange(-24.0, -12.1, binwidth)
     bin_cen = (bins[:-1] + bins[1:]) / 2.0
     for reg in regions:
         Sel=selection(reg) # define selection parameters for this region
