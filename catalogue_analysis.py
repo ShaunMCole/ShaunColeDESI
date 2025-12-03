@@ -23,15 +23,15 @@ warnings.filterwarnings('ignore', module='astropy.io.fits')
 #and other "global" variables so they can be defined in any routine
 def selection(reg):
     """sets up the selection cuts for each region so that a consistent set can be used everywhere"""
-    f_ran=0.05 #random sampling fraction
+    f_ran=1.0 #random sampling fraction
     Qevol=0.78 #0.78 #Assumed luminosity evolution parameter
     area_N_Y1=2393.4228/(4*np.pi*(180.0/np.pi)**2)
     area_S_Y1=5358.2728/(4*np.pi*(180.0/np.pi)**2)
     area_N_Y3=3827.50/(4*np.pi*(180.0/np.pi)**2) #from assuming 2500 randoms/sqdeg in catalog 0 
     area_S_Y3=8527.58/(4*np.pi*(180.0/np.pi)**2)
-    South={'zmin': 0.002, 'zmax': 0.6, 'bright': 10.0, 'faint': 19.5 ,\
+    South={'zmin': 0.002, 'zmax': 1.0, 'bright': 5.0, 'faint': 19.5 ,\
           'area': area_S_Y3, 'col': 'red' , 'style': 'solid', 'f_ran': f_ran, 'Qevol': Qevol}
-    North={'zmin': 0.002, 'zmax': 0.6, 'bright': 10.0, 'faint': 19.5,\
+    North={'zmin': 0.002, 'zmax': 1.0, 'bright': 5.0, 'faint': 19.54,\
           'area': area_N_Y3, 'col': 'blue', 'style': 'dashed', 'f_ran': f_ran, 'Qevol': Qevol}
     if (reg=='N'):
         x=North
@@ -2120,5 +2120,99 @@ def plot_dndz(dat,regions):
     plt.show()        
     return dndz,dndz_err,bin_cen
 
+def link_indices_by_key(table1, table2, key='TARGETID', assume_unique=True):
+    """
+    Create an index mapping from rows in table1 to rows in table2 based on a key column.
 
+    Parameters
+    ----------
+    table1 : astropy.table.Table
+        First table. We will create an index mapping for each of its rows.
+    table2 : astropy.table.Table
+        Second table, where we look up matches by `key`.
+    key : str, optional
+        Column name to match on. Default is 'TARGETID'.
+    assume_unique : bool, optional
+        If True (default), assumes `table2[key]` has unique values. This is faster and
+        returns a single index per row in table1 (or -1 if no match).
+        If False, supports duplicates in `table2[key]`. Returns a Python list of indices
+        per row in table1 (empty list if no match).
+
+    Returns
+    -------
+    mapped_indices : np.ndarray or list
+        If assume_unique=True:
+            A 1D NumPy array of length len(table1) with indices into table2,
+            or -1 if no match for that row.
+        If assume_unique=False:
+            A list of length len(table1), where each element is a list of indices
+            into table2 that match the key (possibly empty).
+    match_mask : np.ndarray (bool)
+        Boolean array of length len(table1) indicating whether there is (at least one) match.
+        For assume_unique=False, True means the corresponding list is non-empty.
+
+    Notes
+    -----
+    - This function works entirely in a vectorized manner for the unique-ID case using
+      argsort + searchsorted (O(n log n)).
+    - For non-unique IDs in table2, it builds ranges for duplicate blocks in the sorted
+      array, still efficient compared to naive per-row searches.
+
+    Examples
+    --------
+    >>> from astropy.table import Table
+    >>> t1 = Table({'TARGETID': [10, 20, 30, 40]})
+    >>> t2 = Table({'TARGETID': [20, 40, 50]})
+    >>> idx, mask = link_indices_by_key(t1, t2, key='TARGETID', assume_unique=True)
+    >>> idx
+    array([-1,  0, -1,  1])
+    >>> mask
+    array([False,  True, False,  True])
+
+    # Handling duplicates in table2:
+    >>> t2 = Table({'TARGETID': [20, 20, 40, 40, 50]})
+    >>> idx_lists, mask = link_indices_by_key(t1, t2, key='TARGETID', assume_unique=False)
+    >>> idx_lists
+    [[ ], [0, 1], [ ], [2, 3]]
+    >>> mask
+    array([False,  True, False,  True])
+    """
+    # Extract key columns as plain numpy arrays (avoids Column-specific edge cases)
+    ids1 = np.asarray(table1[key])
+    ids2 = np.asarray(table2[key])
+
+    # Sort table2's key to enable binary search
+    sort_idx = np.argsort(ids2)
+    sorted_ids2 = ids2[sort_idx]
+
+    # For every id in table1, find insertion position in sorted ids2
+    pos = np.searchsorted(sorted_ids2, ids1)
+
+    # Build boolean mask of exact matches
+    # Need to guard pos==len(sorted_ids2) to avoid index error
+    in_bounds = pos < len(sorted_ids2)
+    matches = np.zeros(len(ids1), dtype=bool)
+    matches[in_bounds] = sorted_ids2[pos[in_bounds]] == ids1[in_bounds]
+
+    if assume_unique:
+        # Map to original indices in table2; non-matches get -1
+        mapped_indices = np.full(len(ids1), -1, dtype=int)
+        mapped_indices[matches] = sort_idx[pos[matches]]
+        return mapped_indices, matches
+    else:
+        # Find full ranges for duplicates in table2 for each matched id
+        # For a matched id at position p, duplicates span:
+        # left = searchsorted(sorted_ids2, id, side='left')
+        # right = searchsorted(sorted_ids2, id, side='right')
+        left_pos = np.searchsorted(sorted_ids2, ids1[matches], side='left')
+        right_pos = np.searchsorted(sorted_ids2, ids1[matches], side='right')
+
+        # Prepare list of lists aligned to table1
+        mapped_lists = [[] for _ in range(len(ids1))]
+        # Fill only for matched rows
+        for i_row, (l, r) in zip(np.nonzero(matches)[0], zip(left_pos, right_pos)):
+            # Convert sorted positions back to original table2 indices
+            mapped_lists[i_row] = list(sort_idx[l:r])
+
+        return mapped_lists, matches
     
