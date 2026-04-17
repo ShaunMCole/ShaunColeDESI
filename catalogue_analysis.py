@@ -3,11 +3,16 @@ from mpl_toolkits.axes_grid1 import host_subplot
 import kcorrections as k
 import numpy as np
 from scipy import stats
+import astropy.units as u
+import fitsio
 from astropy.table import join,Table,Column,vstack
+from astropy.coordinates import SkyCoord
 from kcorrections  import DESI_KCorrection 
 from rootfinders import root_itp,root_sec,root_itp2
 from astropy.cosmology import FlatLambdaCDM
+from astropy.io import fits
 from scipy.ndimage import gaussian_filter
+from scipy.interpolate import RegularGridInterpolator
 from desiutil.plots import prepare_data, init_sky, plot_grid_map, plot_healpix_map, plot_sky_circles, plot_sky_binned
 cosmo = FlatLambdaCDM(H0=100, Om0=0.313, Tcmb0=2.725)   #Standard Planck Cosmology in Mpc/h units
 
@@ -25,14 +30,20 @@ def selection(reg):
     """sets up the selection cuts for each region so that a consistent set can be used everywhere"""
     f_ran=1.0 #random sampling fraction
     Qevol=0.78 #0.78 #Assumed luminosity evolution parameter
+    Qr=Qevol #These are identical and throwback to one we assumed it was the same in all bands
+    Qg=0.91 #These are the values found and listed in the paper
+    Qz=0.45
+    Qw1=0.70    #Normal Bright limit 12 !!!!
     area_N_Y1=2393.4228/(4*np.pi*(180.0/np.pi)**2)
     area_S_Y1=5358.2728/(4*np.pi*(180.0/np.pi)**2)
     area_N_Y3=3827.50/(4*np.pi*(180.0/np.pi)**2) #from assuming 2500 randoms/sqdeg in catalog 0 
     area_S_Y3=8527.58/(4*np.pi*(180.0/np.pi)**2)
-    South={'zmin': 0.002, 'zmax': 1.0, 'bright': 5.0, 'faint': 19.5 ,\
-          'area': area_S_Y3, 'col': 'red' , 'style': 'solid', 'f_ran': f_ran, 'Qevol': Qevol}
-    North={'zmin': 0.002, 'zmax': 1.0, 'bright': 5.0, 'faint': 19.54,\
-          'area': area_N_Y3, 'col': 'blue', 'style': 'dashed', 'f_ran': f_ran, 'Qevol': Qevol}
+    South={'zmin': 0.002, 'zmax': 0.6, 'bright': 0.0, 'faint': 19.5 ,\
+          'area': area_S_Y3, 'col': 'red' , 'style': 'solid', 'f_ran': f_ran,\
+          'Qevol': Qevol, 'Qg': Qg, 'Qr': Qr, 'Qz': Qz, 'Qw1': Qw1}
+    North={'zmin': 0.002, 'zmax': 0.6, 'bright': 0.0, 'faint': 19.54,\
+          'area': area_N_Y3, 'col': 'blue', 'style': 'dashed', 'f_ran': f_ran,\
+          'Qevol': Qevol, 'Qg': Qg, 'Qr': Qr, 'Qz': Qz, 'Qw1': Qw1}
     if (reg=='N'):
         x=North
     elif (reg=='S'):
@@ -41,6 +52,72 @@ def selection(reg):
         print('Selection(region): unknown region')  
     return x
 
+
+#Define the fiducial LF parameters so they only need to be set in one place
+def fiducial(band):
+    """sets up fiducial LF parameters in each band with the values from Sam's table"""
+    gband ={'phi_star': 10.0**(-1.91), 'alpha': -1.26, 'mstar': -19.98}
+    rband ={'phi_star': 10.0**(-2.06), 'alpha': -1.28, 'mstar': -20.97}
+    zband ={'phi_star': 10.0**(-2.15), 'alpha': -1.28, 'mstar': -21.88}
+    w1band={'phi_star': 10.0**(-2.13), 'alpha': -1.20, 'mstar': -21.78}
+    match band:
+        case 'r':
+            x = rband
+        case 'g':
+            x = gband
+        case 'z':
+            x = zband
+        case 'w1':
+            x = w1band
+        case _:
+            print("fiducial(): invalid band name.")
+    return x
+
+def CheckParametersMatch():
+    """Check the parameters stored in the meta data match those being used in this analysis."""
+    #Check the selection parameter in S and N regions
+    Sel=selection('S')
+    assert dat.meta['FAINT_S'] == Sel['faint'], f"Faint limits do not match: {dat.meta['FAINT_S']} != {Sel['faint']}"
+    assert dat.meta['BRIGHT_S'] == Sel['bright'], f"Bright limits do not match: {dat.meta['BRIGHT_S']} != {Sel['bright']}"
+    assert dat.meta['ZMAX_S'] == Sel['zmax'], f"Zmax do not match: {dat.meta['ZMAX_S']} != {Sel['zmax']}"
+    assert dat.meta['ZMIN_S'] == Sel['zmin'], f"Zmin do not match: {dat.meta['ZMIN_S']} != {Sel['zmin']}"
+    assert dat.meta['QEVOL_S'] == Sel['Qevol'], f"Qevol do not match: {dat.meta['QEVOL_S']} != {Sel['Qevol']}"
+    assert dat.meta['QG_S'] == Sel['Qg'], f"Qg do not match: {dat.meta['QG_S']} != {Sel['Qg']}"
+    assert dat.meta['QR_S'] == Sel['Qr'], f"Qr do not match: {dat.meta['QR_S']} != {Sel['Qr']}"
+    assert dat.meta['QZ_S'] == Sel['Qz'], f"Qz do not match: {dat.meta['QZ_S']} != {Sel['Qz']}"
+    assert dat.meta['QW1_S'] == Sel['Qw1'], f"Qw1 do not match: {dat.meta['QW1_S']} != {Sel['Qw1']}"
+    assert dat.meta['AREA_S'] == Sel['area'], f"Areas do not match: {dat.meta['AREA_S']} != {Sel['area']}"
+    assert dat.meta['F_RAN_S'] == Sel['f_ran'], f"f_ran do not match: {dat.meta['F_RAN_S']} != {Sel['f_ran']}"
+    assert dat.meta['COL_S'] == Sel['col'], f"Colours do not match: {dat.meta['COL_S']} != {Sel['col']}"
+    assert dat.meta['STYLE_S'] == Sel['style'], f"Styles do not match: {dat.meta['STYLE_S']} != {Sel['style']}"
+    Sel=selection('N')
+    assert dat.meta['FAINT_N'] == Sel['faint'], f"Faint limits do not match: {dat.meta['FAINT_N']} != {Sel['faint']}"
+    assert dat.meta['BRIGHT_N'] == Sel['bright'], f"Bright limits do not match: {dat.meta['BRIGHT_N']} != {Sel['bright']}"
+    assert dat.meta['ZMAX_N'] == Sel['zmax'], f"Zmax do not match: {dat.meta['ZMAX_N']} != {Sel['zmax']}"
+    assert dat.meta['ZMIN_N'] == Sel['zmin'], f"Zmin do not match: {dat.meta['ZMIN_N']} != {Sel['zmin']}"
+    assert dat.meta['QEVOL_N'] == Sel['Qevol'], f"Qevol do not match: {dat.meta['QEVOL_N']} != {Sel['Qevol']}"
+    assert dat.meta['QG_N'] == Sel['Qg'], f"Qg do not match: {dat.meta['QG_N']} != {Sel['Qg']}"
+    assert dat.meta['QR_N'] == Sel['Qr'], f"Qr do not match: {dat.meta['QR_N']} != {Sel['Qr']}"
+    assert dat.meta['QZ_N'] == Sel['Qz'], f"Qz do not match: {dat.meta['QZ_N']} != {Sel['Qz']}"
+    assert dat.meta['QW1_N'] == Sel['Qw1'], f"Qw1 do not match: {dat.meta['QW1_N']} != {Sel['Qw1']}"
+    assert dat.meta['AREA_N'] == Sel['area'], f"Areas do not match: {dat.meta['AREA_N']} != {Sel['area']}"
+    assert dat.meta['F_RAN_N'] == Sel['f_ran'], f"f_ran do not match: {dat.meta['F_RAN_N']} != {Sel['f_ran']}"
+    assert dat.meta['COL_N'] == Sel['col'], f"Colours do not match: {dat.meta['COL_N']} != {Sel['col']}"
+    assert dat.meta['STYLE_N'] == Sel['style'], f"Styles do not match: {dat.meta['STYLE_N']} != {Sel['style']}"
+    
+    # Check cosmology used matches with that used to create the catalogue
+    assert UseCosmicRedshift == ca.cosmo.Om0, f"Omega_0 does not match: {dat.meta['OM0']} != {ca.cosmo.Om0}"
+    assert dat.meta['H0'] == ca.cosmo.H0.value, f"H_0 does not match: {dat.meta['H0']} != {ca.cosmo.H0.value}"
+    assert dat.meta['TCMB0'] == ca.cosmo.Tcmb0.value, f"Omega_0 does not match: {dat.meta['OM0']} != {ca.cosmo.Tcmb0.value}"
+
+    # If set give reminders of what other options were selected when creating this catalogue
+    if "PMATCH" in dat.meta:
+        if (dat.meta["PMATCH"]): print('In this catalogue, the absolute magnitude distribution of South was forced to agree with North.')
+    if "ZFLOW" in dat.meta:
+        if (dat.meta["ZFLOW"]): print('In this catalogue, CMB redshifts corrected for local peculiar velocities were used to compute distances and evolution.')
+    
+        
+    
 # load in catalogues
 def Y3load_catalogues(fpath):
     """Load the Y3 LSS catalogue"""
@@ -49,8 +126,7 @@ def Y3load_catalogues(fpath):
     dat.add_column(Column(name='reg', data=dat['PHOTSYS']))
 
     # Place holders for addtional quantitites that will be calculated 
-    dat.add_column(Column(name='REST_GMR_0P1', data=np.zeros(dat['Z'].size)))
-    dat.add_column(Column(name='ABSMAG_RP1', data=np.zeros(dat['Z'].size)))
+    dat.add_column(Column(name='REST_GMR_0P1', data=np.zeros(dat['Z'].size)))  #place holder into which to load colours
     dat.add_column(Column(name='ijack', data=np.zeros(dat['Z'].size, dtype=int)))
     
 
@@ -58,6 +134,7 @@ def Y3load_catalogues(fpath):
     dat.add_column(Column(name='gmag', data=22.5-2.5*np.log10(np.clip(dat['flux_g_dered'],1.0e-10,None)) ))
     dat.add_column(Column(name='rmag', data=22.5-2.5*np.log10(dat['flux_r_dered']) ))
     dat.add_column(Column(name='zmag', data=22.5-2.5*np.log10(np.clip(dat['flux_z_dered'],1.0e-10,None)) ))
+    dat.add_column(Column(name='w1mag', data=22.5-2.5*np.log10(np.clip(dat['flux_w1_dered'],1.0e-10,None)) ))
 
     #Add Observerframe colour 
     dat.add_column(Column(name='gmr_obs', data=dat['gmag']-dat['rmag']))
@@ -69,7 +146,12 @@ def Y3load_catalogues(fpath):
 def  load_full_catalogue_subsets(fullfile):
     """Read the full catalogue and extract the good and observed subsets"""    
     zmin = 0.0  # Should be the minimum redshift cut used in making the clustering catalogue and should probably be set to exlcude stars i.e. 0.00125 or so
-    full = Table.read(fullfile)
+    #pre-select which columns I want to read to reduce memory usage.
+    cols = ['TARGETID','MORPHTYPE','EBV','PSFDEPTH_R','GALDEPTH_R','MW_TRANSMISSION_R','SHAPE_R','FLUX_R','FIBERFLUX_R','TSNR2_BGS','ZWARN','Z_not4clus','GOODHARDLOC','DELTACHI2','PHOTSYS']
+    fullarray = fitsio.read(fullfile, columns=cols)
+    full= Table(fullarray)
+    del fullarray
+    #full = Table.read(fullfile, include_names=cols)
     
     # Compute magnitudes and fibre magnitudes and add to the full table
     full.add_column(Column(name='rmag', data=22.5-2.5*np.log10(full['FLUX_R']/full['MW_TRANSMISSION_R']) ))
@@ -83,14 +165,14 @@ def  load_full_catalogue_subsets(fullfile):
 
 
     #The observed subset is defined by those reachable by a fibre (ZWARN not Nan) that isn't broken (ZWARN=999999) that achieves a GOODHARDLOC and is predicted to yield decent SNR
-    mask = (full['ZWARN']*0 == 0) & (full['ZWARN'] != 999999) & (full['GOODHARDLOC'] == 1)  & (full['TSNR2_BGS']>1000.0)
+    mask =  (full['TSNR2_BGS']>1000.0)  & (full['ZWARN']*0 == 0) &  (full['GOODHARDLOC'] == 1) #& (full['ZWARN'] != 999999)
     #From the observed subset we ideally want to remove all stars but settle for removing just the spectroscopically confirmed stars
     mask = ~mask  | (full['Z_not4clus']<zmin) #true for all the unobserved (~mask) and all the observed that are stars (z<zmin)
     mask = ~mask  # now false for the above, i.e. true for all observed that aren't spectroscopically confirmed to be z<zmin (stars)
-    observed=full[mask]
+    observed=full[mask].copy()
     #The subset of galaxies with good redshift have no ZWARN have large DELTACHI2 and are above zmin (i.e. not stars)
     mask_zgood =(observed['DELTACHI2'] > 40) & (observed['ZWARN'] == 0) & (observed['Z_not4clus']>zmin)
-    zgood=observed[mask_zgood]
+    zgood=observed[mask_zgood].copy()
     
     #zgood.info('stats')
     print('number of objects in the observed subset',  observed['TARGETID'].size)
@@ -99,7 +181,7 @@ def  load_full_catalogue_subsets(fullfile):
     print('Faintest Observed Fibre mag:',np.amax(observed['fib_rmag']))
     
     
-    return zgood, observed
+    return zgood, observed, full
 
 
 def load_catalogues(fpathN,fpathS):
@@ -165,6 +247,19 @@ def load_catalogue(fpath):
     return dat
 
 
+# Code to return fraction of Petrosian flux as a function of nsersic byt look up from tabulated values
+def Petro_frac(nsersic):
+    n_sersic=np.asarray([0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,\
+                         1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,2.0,2.1,2.2,2.3,2.4,2.5,2.6,2.7,\
+                        2.8,2.9,3.0,3.1,3.2,3.3,3.4,3.5,3.6,3.7,3.8,3.9,4.0,4.1,4.2,4.3,\
+                         4.4,4.5,4.6,4.7,4.8,4.9,5.0,5.1,5.2,5.3,5.4,5.5,5.6,5.7,5.8,5.9,6.0])
+    frac_sersic=np.asarray([1.0,1.0,1.0,1.0,1.0,0.999,0.998,0.996,0.994,0.991,0.988,0.984,0.979,\
+                        0.975,0.970,0.965,0.959,0.954,0.948,0.942,0.936,0.930,0.924,0.918,0.912,0.906,0.900,0.894,\
+                            0.888,0.882,0.876,0.870,0.864,0.858,0.852,0.846,0.840,0.834,0.829,0.823,0.817,0.811,\
+                            0.806,0.800,0.795,0.789,0.784,0.778,0.773,0.767,0.762,0.757,0.752,0.747,0.741,0.736,0.731,0.726,0.721])
+    frac=np.interp(nsersic,n_sersic,frac_sersic)
+    return  frac
+
 
 # Flag each galaxy by which redshift bin it is in, whether it forms part of the corresponding volumne limited sample and
 # whether it is the portion that is complete for all colours and  record for it the volume of that redshift bin
@@ -178,6 +273,8 @@ def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
     # For each galaxy flag as invollim if it meets the selection cuts througout the volume
     dat['invollim']= (dat['zmax']>=zbin_edges[dat['izbin']+1]) & (dat['zmin']<=zbin_edges[dat['izbin']])
     # For each galaxy compute the volume of the volume limited sample it is in (N and S have to be done separately as areas differ)
+    dat['vollim']=np.zeros(len(dat)) #initialize
+    dat['compl'] = Column([False] * len(dat), dtype=bool) #initialize
     for reg in regions:
         Sel=selection(reg)
         regmask=(dat['reg']==reg)
@@ -384,7 +481,7 @@ def set_jackknife(dat, regmask, limits, noffset, njack, verbose=False):
           else:  # otherwise we have to use this more complicated version
             injack = mask & (((dat['RA']>= 0.0 ) & (dat['RA']<= limits['rahigh'][ijack]+eps)) | ((dat['RA']>=  limits['ralow'][ijack]-eps) & (dat['RA']<=360.0))) & (dat['DEC']>= limits['declow'][ijack]-eps) & (dat['DEC']<= limits['dechigh'][ijack]+eps)
           if(np.count_nonzero(injack)>0):
-            print('reassigning',np.count_nonzero(injack),'an additional objects to jackknife region',ijack+noffset)
+            print('reassigning',np.count_nonzero(injack),'additional objects to jackknife region',ijack+noffset)
             dat['ijack'][injack]=ijack+noffset
         iter += 1
         num_missed=  np.count_nonzero(dat['ijack'][regmask]==-999) 
@@ -409,21 +506,129 @@ def z_tozLG(dat):
     dat.add_column(Column(name='ZLG', data= (1.0+dat['Z'])*(1.0+v_proj/(299792.458))-1.0 ))
     return
 
-# ABSMAG_R= appmag -DMOD  -kcorr_r.k(z, rest_GMR) +Qevol*(z-0.1) 
-def ABSMAG(appmag,z,rest_GMR,kcorr_r,Qevol):
-        """Compute absolute magnitude taking into account k-correction and evolution parameterized by Qevol """
-        DMOD=25.0+5.0*np.log10(cosmo.luminosity_distance(z).value)  
-        ABSMAG=appmag-DMOD-kcorr_r.k(z,rest_GMR)+Qevol*(z-0.1)
+def z_tozCMB(dat, CosmicFlowCorrect=True):
+    """Transform redshift from Heliocentric to CMB velocity frame with or without correction for cosmic flows
+    """
+    #Velocity of the sun baryocentre in the CMB frame
+    v_CMB=368.0 # km/s  NED and AJ 111, 794, 1996
+    RA_CMB=np.deg2rad(167.8455)  # l=263.85deg b=48.25deg also from NED converted to RA,DEC by astro-py
+    DEC_CMB=np.deg2rad(-6.8825)  
+    #Speed of light
+    c_light=299792.458 # km/s
+    #Projection of this velocity along object RA and dec. Note objects RA and dec in degrees but CMB already converted to radians
+    v_proj=v_CMB*(np.sin(np.deg2rad(dat['DEC']))*np.sin(DEC_CMB)+np.cos(np.deg2rad(dat['DEC']))*np.cos(DEC_CMB)*np.cos(np.deg2rad(dat['RA'])-RA_CMB))
+    #Compute redshift in the CMB frame assuming input redshift is Heliocentric
+    dat.add_column(Column(name='ZCMB', data= (1.0+dat['Z'])*(1.0+v_proj/(299792.458))-1.0 ))
+    if CosmicFlowCorrect:   # see https://projets.ip2i.in2p3.fr/cosmicflows/
+        #Also compute the CMB frame redshift after correcting for peculiar velocity using Cosmic Flows 4
+        dcut=500.0  # Only correct below 500 Mpc/h 
+        dsigma=5.0  # and taper to zero to remove sharp edge that will stop convergence 
+        nsig=4.0
+        mask=(dat['Z']*c_light/100.0<dcut)     
+        zcfc=dat['ZCMB'][mask] #initial guess
+        zcfc_p=np.zeros(zcfc.shape) # just set up array, values don't matter
+        
+        rmask = np.ones(zcfc.shape, dtype=bool) #initial to true which redshifts will be iterated
+        n=rmask.sum() #number we still have to correct
+        i=0
+        print('Iterating to get flow corrected redshifts')
+        while ((n > 0)):
+            i+=1 #increment iteration counter
+            print('iteration ',i,' still to converge ',n)
+            distance=c_light*zcfc[rmask]/100.0   #low redshift distance ignoring peculiar velocity (seems to be what CF4 call distance)
+            vflow,sgpos=v_flow(dat['RA'][mask][rmask],dat['DEC'][mask][rmask],distance)
+            vradial= (sgpos[0,:]*vflow[0,:] +sgpos[1,:]*vflow[1,:]+ sgpos[2,:]*vflow[2,:])/np.sqrt(sgpos[0,:]**2 +sgpos[1,:]**2+ sgpos[2,:]**2)
+            tmask=(dcut-distance<nsig*dsigma)
+            vradial[tmask]=vradial[tmask]*np.exp(-((nsig*dsigma-dcut+distance[tmask])/dsigma)**2) # apply taper
+            zcfc_p[rmask]=(1.0+dat['ZCMB'][mask][rmask])*(1.0-vradial/c_light)-1.0
+            rmask_new = (np.abs(zcfc-zcfc_p)>0.0001*np.abs(zcfc)) #This updates the mask to use on the next iteration
+            zcfc[rmask]=zcfc_p[rmask]  # update all those we recomputed on this iteration     
+            rmask=rmask_new
+            n=rmask.sum()
+        if (n==0): print("All flow corrected redshifts have converged.")    
+        #Once iterated to stable values add this as a column in the data table
+        dat.add_column(Column(name='Zcos', data= dat['ZCMB'])) #values before correction to initialise the whole column
+        dat['Zcos'][mask]=zcfc  # replace by flow corrected redshift for the nearby subset               
+    del v_proj,distance,vradial,zcfc,zcfc_p,mask,rmask,rmask_new,tmask  #clean up                   
+    return
+
+def v_flow(ra,dec,distance):
+    """Returns the supergalactic VSGX,VSGXY,VSGZ [km/s] at the nearest grid point in the Cosmic Flows 4 grided velocity field
+       Based on data files that can be found at https://projets.ip2i.in2p3.fr/cosmicflows/.
+       The code was tested to reproduce the bulk flows reported in Table 1 of https://arxiv.org/pdf/2211.16390
+       and to reproduce the redshifts of the Coma and Virgo clusters.
+    """
+  
+    # ra [deg], dec [deg], distance [Mpc/h] converted to supergalactic (l,b)
+    GC = SkyCoord(ra=ra,dec=dec, distance=distance, frame='fk5',equinox='J2000.000', unit=(u.deg,u.deg))
+    sgl = GC.supergalactic.sgl
+    sgb = GC.supergalactic.sgb
+                    
+    # Now further convert Supergalactic coordinates, SGX,SGY,SGZ
+    SGC =SkyCoord(sgl=sgl, sgb=sgb, distance=distance, frame='supergalactic', unit=(u.deg, u.deg))
+    sgx = SGC.cartesian.x.value  # .value extracts the numerical value from the Quantity
+    sgy = SGC.cartesian.y.value
+    sgz = SGC.cartesian.z.value
+                
+    # Load the CF4gp velocity FITS
+    hdul = fits.open("CF4gp_new_64-z008_velocity.fits") # from https://projets.ip2i.in2p3.fr/cosmicflows/
+    data = hdul[0].data.astype(float)   # shape = (3, 64, 64, 64)
+    data=data*52.0 #factor documentation says should be included!
+    coords=np.linspace(-500.0*(1.0-1.0/64.0),500.0*(1.0-1.0/64.0),64) #grid cell centres
+
+
+    # Build interpolators
+    vsgx=data[0]
+    vx_interp = RegularGridInterpolator((coords, coords, coords), vsgx,
+                                    bounds_error=False, fill_value=0.)
+    vsgy=data[1]
+    vy_interp = RegularGridInterpolator((coords, coords, coords), vsgy,
+                                    bounds_error=False, fill_value=0.)
+    vsgz=data[2]
+    vz_interp = RegularGridInterpolator((coords, coords, coords), vsgz,
+                                    bounds_error=False, fill_value=0.)
+
+    
+    pts = np.column_stack((sgx, sgy, sgz))
+
+
+    return np.asarray([vx_interp(pts), vy_interp(pts), vz_interp(pts)]),np.asarray([sgx,sgy,sgz]) # return velocity components at grid points and supergalactic sgx,sgy,sgz
+
+
+
+    
+
+# ABSMAG_R= appmag -DMOD(zcos)  -kcorr_r.k(z, rest_GMR) +Qevol*(zcos-0.1) 
+def ABSMAG(appmag,z,rest_GMR,kcorr_r,Qevol,zcos=None):
+        """Compute absolute magnitude taking into account k-correction and evolution parameterized by Qevol.
+        The optional zcos argument allows the cosmological (pure hubble flow) redshift to be used for the DMOD and evolutionary correction while the kcorrection uses the default/measured redshift"""
+        if zcos is None:
+            zcos = z
+        else:
+            print('Using cosmological redshift for distance modulus and evolution terms')
+            rms = np.sqrt(np.mean((z-zcos)**2))
+            print('rms difference between z and zcos=',rms)
+                  
+        DMOD=25.0+5.0*np.log10(cosmo.luminosity_distance(zcos).value)  
+        ABSMAG=appmag-DMOD-kcorr_r.k(z,rest_GMR)+Qevol*(zcos-0.1)
         return ABSMAG
     
 # Make plots of the k-corrections to check they are sensible and smooth in both redshift and colour
 def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True, forceN=False):
     """Assign restframe colours from g-r vs redshift lookup table and ABSMAG using k-correction polynomials"""
+
+    if "ABSMAG_RP1" not in dat.colnames:
+        dat.add_column(Column(name='ABSMAG_W1P1', data=np.zeros(dat['Z'].size)))#place holder into which to load absolute mags
+        dat.add_column(Column(name='ABSMAG_ZP1', data=np.zeros(dat['Z'].size))) #place holder into which to load absolute mags
+        dat.add_column(Column(name='ABSMAG_GP1', data=np.zeros(dat['Z'].size))) #place holder into which to load absolute mags
+        dat.add_column(Column(name='ABSMAG_GP1_gk', data=np.zeros(dat['Z'].size))) #place holder into which to load absolute mags
+        dat.add_column(Column(name='ABSMAG_RP1', data=np.zeros(dat['Z'].size))) #place holder into which to load absolute mags
+    
     for reg in regions:
       if forceN: 
           lookupreg = 'N'
       else:
-          lookupreg = 'S'
+          lookupreg = reg
       print('Computing restframe colours for region ',reg, 'using lookup for region ',lookupreg )
       Sel=selection(reg) # define selection parameters for this region
       regmask=(dat['reg']==reg)#mask to select objects in specified region
@@ -434,12 +639,29 @@ def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True, forceN=Fals
       else: 
           print('using precomputed k-corrections')         
           
-      # call to use the lookup table to assign rest-frame colours     
-      k.colour_table_lookup(dat, regmask, lookupreg, replot=plot, fresh=False) 
+      # call to use the lookup table to assign rest-frame colours  
+      k.colour_table_lookup(dat, regmask, lookupreg, replot=plot, fresh=False)     
 
-      # call to assign k-corrected magnitudes  
+      # call to assign k-corrected magnitudes in the W1-band  
+      kcorr_rM  = DESI_KCorrection(band='W1', file='jmext', photsys=lookupreg) #set k-correction for region
+      dat['ABSMAG_W1P1'][regmask]=ABSMAG(dat['w1mag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qw1'],zcos=dat['Zcos'][regmask])
+      
+      # call to assign k-corrected magnitudes in the z-band
+      kcorr_rM  = DESI_KCorrection(band='Z', file='jmext', photsys=lookupreg) #set k-correction for region
+      dat['ABSMAG_ZP1'][regmask]=ABSMAG(dat['zmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qz'],zcos=dat['Zcos'][regmask])  
+
+      # call to assign k-corrected magnitudes in the r-band  
       kcorr_rM  = DESI_KCorrection(band='R', file='jmext', photsys=lookupreg) #set k-correction for region
-      dat['ABSMAG_RP1'][regmask]=ABSMAG(dat['rmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qevol'])
+      dat['ABSMAG_RP1'][regmask]=ABSMAG(dat['rmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qevol'],zcos=dat['Zcos'][regmask])
+
+      # call to assign k-corrected magnitudes in the g-band
+      kcorr_rM  = DESI_KCorrection(band='G', file='jmext', photsys=lookupreg) #set k-correction for region
+      dat['ABSMAG_GP1_gk'][regmask]=ABSMAG(dat['gmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qg'],zcos=dat['Zcos'][regmask])
+      dat["ABSMAG_GP1"][regmask]=dat["ABSMAG_RP1"][regmask]+dat["REST_GMR_0P1"][regmask] + (Sel['Qg']-Sel['Qevol'])*(dat['Z'][regmask]-0.1)
+        
+      #Following Call is probably not needed but resets kcorr_rM t the r band as it was before this code computed g, z, and w1 absolute magnitudes
+      kcorr_rM  = DESI_KCorrection(band='R', file='jmext', photsys=lookupreg) #set k-correction for region
+    
 
 
     return
@@ -447,10 +669,10 @@ def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True, forceN=Fals
 
 
 #Compute zmax,zmin and along with v and vmax add to the data table    
-def compute_zmax_vmax(dat,regions,forceN=False):
-    """Compute vmax and vmin using k-correction polynomials """
+def compute_zmax(dat,regions,forceN=False):
+    """Compute zmax and zmin using k-correction polynomials """
     # We want to solve
-    # appmag=ABSMAG_R+ DMOD  +kcorr_r.k(z, rest_GMR) -Qevol*(z-0.1) = maglimit [19.5 for BSG S]
+    # appmag=ABSMAG_R+ DMOD(z)  +kcorr_r.k(z, rest_GMR) -Qevol*(z-0.1) = maglimit [19.5 for BSG S]
     # which is equivalent to 
     # 'magdiff' = maglimit-ABSMAG_R = DMOD  +kcorr_r.k(z, rest_GMR) -Qevol*(z-0.1) 
     # Difference in apparent and absolute magnitude, magapp-ABSMAG, as a function of redshift
@@ -459,9 +681,12 @@ def compute_zmax_vmax(dat,regions,forceN=False):
         magdiff =  DMOD  +kcorr_r.k(z, rest_GMR) -Qevol*(z-0.1)
         return magdiff
 
-    vmax=np.zeros(dat['Z'].size) # set up array ready to receive vmax values
-    vmin=np.zeros(dat['Z'].size) # set up array ready to receive vmin values
-    v=np.zeros(dat['Z'].size) # v values
+    # Detect and flag whether we have a single redshift or peculiar velocity must be taken into account as
+    # we have separate ZHelio (affecting k-correction) and Zcos (deterining distance)
+    if 'ZHelio' in dat.colnames: 
+        tworedshifts=True
+    else:
+        tworedshifts=False    
     zmax=np.zeros(dat['Z'].size) # and zmax values
     zmin=np.zeros(dat['Z'].size) # and zmin values
     for reg in regions:
@@ -477,19 +702,45 @@ def compute_zmax_vmax(dat,regions,forceN=False):
         mask = regmask # At one time we also limited by bright and faint magnitude limit but that is now done at the start of the pipeline
         print('Sample size in this region and between faint and bright apparent magnitude limits:',mask.sum())
         
-        magdiff_target=Sel['faint']-dat['ABSMAG_RP1']
-        #The zmax we want has to be between the following two values
-        zguess0=np.copy(dat['Z'])
+        magdiff_target=Sel['faint']-dat['ABSMAG_RP1']  
+        #We need to set up the interval [zguess0,zguess1] that bounds the root zmax
+        #If dat['Z']=dat['Zcos'] then the lower bound zguess0 would simply be dat['Z']=dat['Zcos']. But when they differ even 
+        #their minimum is not strict bound though it works in nearly all cases.
+        if tworedshifts:
+            zguess0=np.minimum(dat['ZHelio'],dat['Zcos'])
+        else:
+            zguess0=dat['Z']
+        # We have to trap the cases where this is not the bound and for them set zguess0=0
+        magdiff_guess0=magdiff(zguess0,dat['REST_GMR_0P1'],Sel['Qevol'])
+        trap=(magdiff_guess0>magdiff_target)
+        print('Number of cases trapped where the lower bound needs adjusting:',trap[mask].sum())
+        zguess0[trap]=0.0 # reseting their lower limit to the hard bound of z=0
+        magdiff_guess0=magdiff(zguess0,dat['REST_GMR_0P1'],Sel['Qevol'])
+        trap=(magdiff_guess0>magdiff_target)
+        print('Number of cases still trapped where the lower bound needs adjusting:',trap[mask].sum())
         zguess1=Sel['zmax']+0.0*zguess0 # "sample_zmax"
         #If the root is at greater than zguess1="sample_zmax" the root finder will just return zguess1  (the b limit in the rootfinder code)
         ztol=0.00001
         zmax[mask]=root_itp2(magdiff,dat['REST_GMR_0P1'][mask],Sel['Qevol'],magdiff_target[mask],ztol,zguess0[mask],zguess1[mask])
         print('zmax values found')
+    
 
         magdiff_target=Sel['bright']-dat['ABSMAG_RP1']
         #The zmin we want has to be between the following two values
         zguess0=np.zeros(dat['Z'].size)+Sel['zmin'] # "sample_zmin"
-        zguess1=np.copy(dat['Z'])
+        if tworedshifts:
+            zguess1=np.maximum(dat['ZHelio'],dat['Zcos'])
+        else:  
+            zguess1=dat['Z']
+        # We have to trap the few cases where this is not the bound and for them set zguess1="sample_zmax"
+        magdiff_guess1=magdiff(zguess1,dat['REST_GMR_0P1'],Sel['Qevol'])
+        trap=(magdiff_guess0<magdiff_target)
+        print('Number of cases trapped where the upper bound needs adjusting:',trap[mask].sum())
+        zguess1[trap]=Sel['zmax'] # reseting their lower limit to the hard bound of the samplez max
+        magdiff_guess1=magdiff(zguess1,dat['REST_GMR_0P1'],Sel['Qevol'])
+        trap=(magdiff_guess0<magdiff_target)
+        print('Number of cases still trapped where the upper bound needs adjusting:',trap[mask].sum())
+        
         #They are fed into the root finder in reverse order so that if root is at less than zguess0="sample_zmin" the root finder
         # will just return zguess0 (the b limit in the root findr code) which is what we want.
         ztol=0.00001
@@ -499,31 +750,94 @@ def compute_zmax_vmax(dat,regions,forceN=False):
         zcheck=  (zmin[mask]-Sel['zmin'])
         if (np.min(zcheck)<0): print('ERROR: object with zmin<Sel[zmin]')
 
-        #Apply selection bounds and compute v and vmax
-        print('applying selection limits and computing vmax (vmax-vmin) and v (v-vmin) but also vmin')
+        del zcheck,zguess0,zguess1,mask,magdiff_target,magdiff_guess0,magdiff_guess1     #tidy up
+
+        #Checking selection bounds 
+        print('Checking selection limits')
         if ((zmax[regmask].max()>Sel['zmax']).any()): 
             print('Error: Some zmax values greater than sample zmax cut')
             pmask= (zmax>Sel['zmax']) & regmask
             print('Cases of zmax>',Sel['zmax'],zmax[pmask]) 
+            del pmask
         if ((zmin[regmask].min()<Sel['zmin']).any()): 
             print('Error: Some zmin values less than sample zmin cut')
             pmask= (zmin<Sel['zmin']) & regmask
             print('Cases of zmin<',Sel['zmin'],zmin[pmask]) 
-        v[regmask]=Sel['area']*(4.0*np.pi/3.0)*\
-        ( (cosmo.comoving_distance(dat['Z'][regmask]).value)**3 -(cosmo.comoving_distance(zmin[regmask]).value)**3 )
-        
-        vmax[regmask]=Sel['area']*(4.0*np.pi/3.0)*\
-        ( (cosmo.comoving_distance(zmax[regmask]).value)**3 -(cosmo.comoving_distance(zmin[regmask]).value)**3 )
-        vmin[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(zmin[regmask]).value)**3 
-   
+            del pmask
+       
+
     dat.add_column(Column(name='zmax', data=zmax))
     dat.add_column(Column(name='zmin', data=zmin))
-    dat.add_column(Column(name='v', data=v))
-    dat.add_column(Column(name='vmax', data=vmax))
-    dat.add_column(Column(name='vmin', data=vmin))
-    del zguess0,zguess1,zmin,zmax,v,vmax,vmin,mask,regmask   #tidy up  
+
+    del regmask,zmin,zmax  #tidy up  
     return
 
+#Compute v, vmin and vmax variables from the z, zmin and zmax and the area of the corresponding region.
+# optionally if zsplit>0 split the sample at this redshift and set vmin and vmax according to which sample the galaxy lies
+#Also optionally if dz>0 additionally define windowed zwinmin, zwinmax and corresponding vminmin, ,vwin, vwinmax used in defining veff and random catalogues
+def add_vminvmax(dat,regions, zsplit=0.0, dz=0):
+    #If selected defined the windowed zwinmin, zwinmax and corresponding volume coordinates
+    if (dz>0) :
+        dat['zwinmin'] = np.clip(dat['zmin'], a_min=dat['Z']-dz, a_max=np.inf)
+        dat['zwinmax'] = np.clip(dat['zmax'], a_min=-np.inf, a_max=dat['Z']+dz)
+        vmax=np.zeros(dat['Z'].size) # set up array ready to receive vmax values
+        vmin=np.zeros(dat['Z'].size) # set up array ready to receive vmin values
+        v=np.zeros(dat['Z'].size) # v values
+        for reg in regions:
+            print('For redshift windows: starting region ',reg)
+            Sel=selection(reg) # define selection
+            regmask=(dat['reg']==reg)#mask to select objects in specified region
+            vmin[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zwinmin'][regmask]).value)**3 
+            v[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['Z'][regmask]).value)**3 - vmin[regmask]
+            vmax[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zwinmax'][regmask]).value)**3  - vmin[regmask]
+        if 'vwin' in dat.colnames:  
+            dat.replace_column('vwin',Column(name='vwin', data=v))
+            dat.replace_column('vwinmax',Column(name='vwinmax', data=vmax))
+            dat.replace_column('vwinmin',Column(name='vwinmin', data=vmin))
+        else:
+            dat.add_column(Column(name='vwin', data=v))
+            dat.add_column(Column(name='vwinmax', data=vmax))
+            dat.add_column(Column(name='vwinmin', data=vmin))
+
+
+    #Define the standard volume coordinates
+    vmax=np.zeros(dat['Z'].size) # set up array ready to receive vmax values
+    vmin=np.zeros(dat['Z'].size) # set up array ready to receive vmin values
+    v=np.zeros(dat['Z'].size) # v values
+    for reg in regions:
+        print('starting region ',reg)
+        Sel=selection(reg) # define selection
+        regmask=(dat['reg']==reg)#mask to select objects in specified region
+        vmin[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zmin'][regmask]).value)**3 
+        v[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['Z'][regmask]).value)**3 - vmin[regmask]
+        vmax[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zmax'][regmask]).value)**3  - vmin[regmask]
+        
+    # If select split sample into two redshift bins at zsplit
+    if (zsplit>0.0):
+     print('Splitting the sample into two redshift bins at z_split=',zsplit)   
+     for reg in regions:   
+        print('starting region ',reg)
+        Sel=selection(reg) # define selection
+        regmask=(dat['reg']==reg) & (dat['Z']<=zsplit) #mask to select objects in specified region and z<zsplit
+        vmin[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zmin'][regmask]).value)**3 
+        v[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['Z'][regmask]).value)**3 - vmin[regmask]
+        vmax[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(np.clip(dat['zmax'][regmask],None,zsplit)).value)**3  - vmin[regmask]
+        regmask=(dat['reg']==reg) & (dat['Z']>zsplit) #mask to select objects in specified region and z<zsplit
+        vmin[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(np.clip(dat['zmin'][regmask],zsplit,None)).value)**3 
+        v[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['Z'][regmask]).value)**3 - vmin[regmask]
+        vmax[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zmax'][regmask]).value)**3  - vmin[regmask]
+         
+    # store or overwrite the volume coordinates     
+    if 'v' in dat.colnames:  
+        dat.replace_column('v',Column(name='v', data=v))
+        dat.replace_column('vmax',Column(name='vmax', data=vmax))
+        dat.replace_column('vmin',Column(name='vmin', data=vmin)) 
+    else:
+        dat.add_column(Column(name='v', data=v))
+        dat.add_column(Column(name='vmax', data=vmax))
+        dat.add_column(Column(name='vmin', data=vmin)) 
+    return
+    
 def plot_kcorr(regions):
     """plot k-correction polynomials"""
     # extract the default colour sequence to have more control of line colors
@@ -561,7 +875,7 @@ def plot_zmax_absmag(dat):
     col=np.clip(((dat['REST_GMR_0P1']+0.5)/2.0),0.0,1.0)
     plt.scatter(dat['ABSMAG_RP1'],dat['zmax'], marker='.', c=col ,cmap=cmap, linewidths=0,s=0.25,alpha=0.2,label='colour coded by rest frame colour')
     plt.xlim([-12,-23])
-    plt.ylim([0.0,0.6])
+    plt.ylim([0.0,0.62])
     plt.ylabel('$z_{max}$')
     plt.xlabel('$M_r - 5 \log h$')
     plt.legend()
@@ -1032,10 +1346,10 @@ def lumfun2D_vmax(dat,regions, bandmag='ABSMAG_RP1', colour="REST_GMR_0P1", band
             
 
 #Estimate and plot (with different plotting options) 1/vmax Luminosity function
-def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot=False, binwidth=0.25, ratio=False, Veff=False, Vollim=False, OverdensityCorrection=False):
+def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='r', plot=True, saveplot=False, binwidth=0.25, ratio=False, Vchoice="vmax", Vollim=False, OverdensityCorrection=False, Mstar=-20.97, Logphistar=-2.06, Alpha=-1.28, limits=[]):
     """1/Vmax LF estimator"""
     eps=1.0e-10 #used to avoid divide by zero
-    bins = np.arange(-24.0, -12.1, binwidth)
+    bins = np.arange(-25.0, -10.0, binwidth)
     bin_cen = (bins[:-1] + bins[1:]) / 2.0
     for reg in regions:
         Sel=selection(reg) # define selection parameters for this region
@@ -1045,11 +1359,18 @@ def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot
         & (dat['rmag'] < Sel['faint'])  & (dat['rmag'] > Sel['bright']) 
         # A weighted histogram using the combined systematics and completeness weight and 1/Vmax
         weight=np.copy(dat['WEIGHT'])# just to intialize 
-        if Veff:
+
+        
+        match Vchoice:
+         case 'Veff':
             print('Using Veff_max rather than Vmax in LF estimate.')
             weight[mask]=dat['WEIGHT'][mask]/(binwidth*dat['veff_max'][mask]*Sel['f_ran'])
             phi,binr=np.histogram(dat[bandmag][mask], bins=bins,  weights=weight[mask])
-        else:
+         case 'Vswml':
+            print('Using Vswml rather than Vmax in LF estimate.')
+            weight[mask]=dat['WEIGHT'][mask]/(binwidth*dat['vswml'][mask]*Sel['f_ran'])
+            phi,binr=np.histogram(dat[bandmag][mask], bins=bins,  weights=weight[mask])
+         case _: #default case
             if (Vollim==0): #not a volume limited sample
                 weight[mask]=dat['WEIGHT'][mask]/(binwidth*dat['vmax'][mask]*Sel['f_ran'])
                 if(OverdensityCorrection): weight[mask]=weight[mask]/dat['overdensity'][mask]  # overdensity correction if selected
@@ -1060,12 +1381,14 @@ def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot
                 phi,binr=np.histogram(dat[bandmag][mask], bins=bins,  weights=weight[mask])
         
         log_phi=np.log10(np.maximum(phi,eps))
+        lumden=np.sum((10.0**(-0.4*bin_cen)*phi))*binwidth #luminosity density
 
         # compute jackknife errors if jackknife indices exist
 
         njack=1+np.max(dat["ijack"][mask])-np.min(dat["ijack"][mask]) #number of jackknife samples
-        print('number of jackknife samples:',njack,' for region:',reg," in range:",np.min(dat["ijack"][mask]),np.max(dat["ijack"][mask]))
+        if plot: print('number of jackknife samples:',njack,' for region:',reg," in range:",np.min(dat["ijack"][mask]),np.max(dat["ijack"][mask]))
         phi_jack=np.zeros((njack,log_phi.size),dtype=float)# array in which to store all the jackknife estimates
+        lumden_jack=np.zeros((njack),dtype=float)# array to store jacknife estimates of the luminosity density
         if (njack>1):  #Only do jackknife errors if we have jackknife indices otherwise default to Poisson errors
            for ijack in range(np.min(dat["ijack"][mask]), np.max(dat["ijack"][mask]) + 1):
                jjack=ijack-np.min(dat["ijack"][mask]) #offset index so this region starts at zero
@@ -1074,13 +1397,49 @@ def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot
                phi_jack[jjack,:],binr=np.histogram(dat[bandmag][jkmask], bins=bins,  weights=weight[jkmask])
                phi_jack[jjack,:]=phi_jack[jjack,:]*njack/(njack-1)  # rescale to account for the missing region 
                log_phi_jack=np.log10(np.maximum(phi_jack[jjack,:],eps))
+               lumden_jack[jjack]=np.sum((10.0**(-0.4*bin_cen)*phi_jack[jjack,:]))*binwidth  #luminosity density for jackknife sample
                #plt.plot(bin_cen,log_phi_jack) # plot each jackknife estimate in turn
            phi_mean=np.mean(phi_jack,axis=0) #compute the mean over the jackknife samples
            phi_err=np.std(phi_jack,axis=0)*np.sqrt(njack-1)  # jackknife rescaling factor as np.std()'s default is ddof=0
+           lumden_mean= np.mean(lumden_jack) #compute the mean over the jackknife samples
+           lumden_err=np.std(lumden_jack)*np.sqrt(njack-1)  # jackknife rescaling factor as np.std()'s default is ddof=0
            log_phi_jack=np.log10(np.maximum(phi_mean,eps))
            #plt.plot(bin_cen,log_phi_jack,linewidth=3) # plot mean of jackknife estimates
            log_phi_low=np.log10(np.maximum(phi-phi_err,eps))
            log_phi_hi=np.log10(np.maximum(phi+phi_err,eps))
+           print('luminosity density =', lumden,' +/-', lumden_err, 'in native units of the integral 10^-0.4Mag Phi(Mag) dMag')
+           # The following converts to conventional units
+           lsol=3.828E+26 # Bolometric luminosity of the sun in Watts 
+           flux_nanomaggie = 3.631E-32 # Watts/m^2/Hz
+           tenpc = 3.084E+17 # m     10pc in metres (This comes in as absolute magnitude is defined at 10pc)
+           match band:
+                # from https://svo2.cab.inta-csic.es/theory/fps/index.php?mode=browse&gname=SLOAN&asttyp
+                case 'g':
+                    lambda_eff=467.178 #nm  Effective wavelength of SDSS g-band filter at z=0
+                    msol=5.45   #absolute magnitude of the sun in the zref=0.1 SDSS g-band filter (see https://iopscience.iop.org/article/10.1086/375776/pdf)
+                    lsol_nu= 10.0**(-0.4*msol) *1.0E+09 * 4.0*np.pi * tenpc**2  * flux_nanomaggie  #L_nu in W/Hz for the sun in this band
+                case 'r':
+                    lambda_eff=614.112 #nm  Effective wavelength of SDSS r-band filter at z=0
+                    msol=4.76 #absolute magnitude of the sun in the zref=0.1 SDSS r-band filter (see https://iopscience.iop.org/article/10.1086/375776/pdf)
+                    lsol_nu= 10.0**(-0.4*msol)*1.0E+09  * 4.0*np.pi * tenpc**2  * flux_nanomaggie  #L_nu in W/Hz for the sun in this band
+                    print('r-band lsol_nu=',lsol_nu/1.0E+11,' 10^11 W Hz^-1')
+                case 'z':   
+                    lambda_eff=892.278 #nm  Effective wavelength of SDSS z-band filter at z=0
+                    msol=4.51 #absolute magnitude of the sun in the zref=0.1 SDSS z-band filter (see https://iopscience.iop.org/article/10.1086/375776/pdf)
+                    lsol_nu= 10.0**(-0.4*msol)*1.0E+09  * 4.0*np.pi * tenpc**2  * flux_nanomaggie  #L_nu in W/Hz for the sun in this band
+                case 'w1':
+                    lambda_eff=3400.0 # These w1 band figures are approximately correct but if used we need to find a published reference
+                    msol=5.94 
+                    lsol_nu= 10.0**(-0.4*msol)*1.0E+09  * 4.0*np.pi * tenpc**2  * flux_nanomaggie  #L_nu in W/Hz for the sun in this band 
+           lsol=3.828E+26 # Bolometric luminosity of the sun in Watts      
+           freq_nu = (1.1*299792458*10.0**9/lambda_eff) #frequency in Hz in rest frame at z_ref=0.1
+           print('effective frequency (at zref=0.1) =',freq_nu/10**14,'10^14 Hz') 
+           j_nu=lumden*10**(0.4*msol)
+           j_nu_err=lumden_err*10**(0.4*msol)
+           nuj_nu=freq_nu*j_nu*lsol_nu/lsol  #compute nu*j_nu and re-express in solar units
+           nuj_nu_err=freq_nu*j_nu_err*lsol_nu/lsol
+           print('luminosity density  j_nu=', j_nu/10**8, '+/-', j_nu_err/10**8,'10^8 h Lsol,nu/(cMpc)^3') 
+           print('luminosity density nu j_nu=',  nuj_nu/10**8, '+/-', nuj_nu_err/10**8,'10^8 h Lsol/(cMpc)^3')
            
             
         else:
@@ -1092,10 +1451,11 @@ def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot
            log_phi_hi=np.log10(np.maximum(phi+phi_err,eps))
         
         
-        # Reference Schehcter function from Sam's draft paper Table 1
-        phi_star=10.0**(-2.13)
-        alpha=-1.36
-        mstar=-21.10
+        # Reference Schechter function from Sam's draft paper Table 1
+        Fid=fiducial(band)
+        phi_star=Fid["phi_star"]
+        alpha=Fid["alpha"]
+        mstar=Fid["mstar"]
         l_lstar= 10.0**(0.4*(-bin_cen+mstar))
         phi_sch= phi_star * l_lstar**(1.0+alpha) * np.exp(-l_lstar) *(np.log(10.0)/2.5)
         log_phi_sch = np.log10(phi_sch)
@@ -1116,6 +1476,10 @@ def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot
         plt.ylabel('$log_{10} \phi(M_r)\quad  [mag^{-1} (Mpc/h)^{-3}]$')
         plt.xlim([-26,-7.5])
         plt.ylim([-7,1.0])
+        # place some vertical lines on the plot at the positions passed in as limits
+        if (len(limits)>0):
+            for i in range(0,len(limits)):
+                plt.plot(([limits[i],limits[i]]),([-7.0,1.0]))
         #Add label to the legend to indicate what sort of error estimate was used
         handles, labels = plt.gca().get_legend_handles_labels()
         handles.append(plt.Line2D([], [], color='black', linestyle='None'))
@@ -1144,16 +1508,19 @@ def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='R', plot=True, saveplot
 
 
 #Plot SWML Luminosity function   (Uses method from Eftathiou, Ellis and Petersen 1988 MNRAS 232,431 [EEP])
-def lumfun_swml(dat,regions,log_phi_guess,magbins):
+def lumfun_swml(dat,regions,log_phi_guess,magbins,band='r'):
     """SWML LF estimator"""
     #
     extra_plots=False
     
     # Compute luminosity density of the input LF which will be used for the normalization
     lumden=np.sum((10.0**(-0.4*magbins)*(10.0**log_phi_guess)))
+
     
+    if "vswml" not in dat.colnames:
+        dat.add_column(Column(name='vswml', data=np.zeros(dat['Z'].size)))#place holder into which to load vswml for each galaxy
     # Array for denominator in EEP expression Eqn(2.12), which is a kind of effective volume
-    denominator=np.zeros(magbins.size)
+    vswml=np.zeros(magbins.size)
     # Array for the faint and bright absolute magnitude limits at each galaxy redshift
     absmag_faint=np.zeros(dat['Z'].size) 
     absmag_bright=np.zeros(dat['Z'].size) 
@@ -1185,11 +1552,14 @@ def lumfun_swml(dat,regions,log_phi_guess,magbins):
   
         # Compute the count of galaxies in each absolute magnitude bin -- remains fixed in each iteration
         count,bins = np.histogram(dat['ABSMAG_RP1'][mask], bins=bin_edges, weights=dat['WEIGHT'][mask])
-                             
+        bin_indx=np.digitize(dat['ABSMAG_RP1'][mask],bin_edges,right=False)-1   # index of the bin each object is counted in
+        bin_indx = np.clip(bin_indx, 0, len(bin_edges) - 2) # avoid rounding error edge cases generating an out of bounds index
+
+      
         # Compute the absolute faint magnitude limit at the redshift of the galaxy using its k-correction
-        absmag_faint[mask] = ABSMAG(Sel['faint'],dat['Z'][mask],dat['REST_GMR_0P1'][mask],kcorr_r,Sel['Qevol'])  
+        absmag_faint[mask] = ABSMAG(Sel['faint'],dat['Z'][mask],dat['REST_GMR_0P1'][mask],kcorr_r,Sel['Qevol'],zcos=dat['Zcos'][mask])  
         # Compute the absolute bright magnitude limit at the redshift of the galaxy using its k-correction
-        absmag_bright[mask] = ABSMAG(Sel['bright'],dat['Z'][mask],dat['REST_GMR_0P1'][mask],kcorr_r,Sel['Qevol'])  
+        absmag_bright[mask] = ABSMAG(Sel['bright'],dat['Z'][mask],dat['REST_GMR_0P1'][mask],kcorr_r,Sel['Qevol'],zcos=dat['Zcos'][mask])  
         if extra_plots:
             plt.scatter(dat['Z'][mask],absmag_faint[mask], marker='.', linewidths=0, s=0.25, alpha=0.5,label='faint') # quick look to see if reasonable
             plt.scatter(dat['Z'][mask],absmag_bright[mask], marker='.', linewidths=0, s=0.25, alpha=0.5,label='bright') # quick look to see if reasonable
@@ -1233,24 +1603,29 @@ def lumfun_swml(dat,regions,log_phi_guess,magbins):
                 hramp[galmask]= (absmag-absmag_bright[galmask])/bin_width+0.5 #bright ramp from 1 to 0
                 galmask= (mask) & (absmag<absmag_faint+halfbin)# & (absmag>absmag_bright-halfbin) #mask to select all galaxies to sum over
                         #i.e. all those at redshifts for which the bright/faint limit is brighter/fainter than the bin value
-                denominator[magmask]=np.sum((dat['WEIGHT'][galmask]*hramp[galmask]/phi_cuml_gal[galmask])) #denominator of EEP Eqn(2.12)
-                if ((count[magmask]>0) & (denominator[magmask]>0) ):
-                    phi1[magmask]=count[magmask]/(bin_width*denominator[magmask]) # EEP Eqn(2.12) for bins that have data
+                vswml[magmask]=np.sum((dat['WEIGHT'][galmask]*hramp[galmask]/phi_cuml_gal[galmask])) #denominator of EEP Eqn(2.12)
+                if ((count[magmask]>0) & (vswml[magmask]>0) ):
+                    phi1[magmask]=count[magmask]/(bin_width*vswml[magmask]) # EEP Eqn(2.12) for bins that have data
                     
             fac=lumden/np.sum((10.0**(-0.4*magbins)*phi1)) # luminosity density ratio
             print('region:',reg,': luminosity density correction factor:',fac)
             phi1=phi1*fac
+            vswml=vswml/(fac*Sel['f_ran']) 
             log_phi=np.log10(np.maximum(phi0,1.0e-10))
-           
+
+        # Once converged store the Vswml for each galaxy and plot the LF
+        dat['vswml'][mask]=vswml[bin_indx]
     
         log_phi=np.log10(np.maximum(phi1,1.0e-10))
         print('converged after',i,' iterations or reached maximum',imax)
         plt.plot(magbins,log_phi,label='SWML i={} ({})'.format(i, reg),color=Sel['col'])
-        
+
+      
     # Reference Schehcter function from Sam's draft paper Table 1
-    phi_star=10.0**(-2.13)
-    alpha=-1.36
-    mstar=-21.10
+    Fid=fiducial(band)
+    phi_star=Fid['phi_star']
+    alpha=Fid['alpha']
+    mstar=Fid['mstar']
     l_lstar= 10.0**(0.4*(-magbins+mstar))
     phi_sch= phi_star * l_lstar**(1.0+alpha) * np.exp(-l_lstar) *(np.log(10.0)/2.5)
     log_phi_sch = np.log10(phi_sch)
@@ -1266,7 +1641,7 @@ def lumfun_swml(dat,regions,log_phi_guess,magbins):
     plt.savefig(spath)
     plt.show()
 
-    del phi0,phi1,count,absmag_faint,phi_cuml,denominator,mask,regmask,magmask,galmask
+    del phi0,phi1,count,absmag_faint,phi_cuml,vswml,mask,regmask,magmask,galmask,bin_indx
     return log_phi,magbins
 
 
@@ -1377,173 +1752,9 @@ def makefake(reg,nran):
 #Computes a V_eff for each galaxiy that can be used in place V_max in LF and other weighted estimates.
 
 # The basic idea is V_eff= integral  Delta(z) dV/dz  dz  where the overdensity Delta(z) is estimated 
-# by making clones of galaxies and redistributing them withing their V_max volume to define a smooth dN/dz
+# by making clones of galaxies and redistributing them within their V_max volume to define a smooth dN/dz
 # from which can be compared with the actual dN/dz to define the run overdensity with redshift.
 #
-
-def compute_veff(dat,regions):
-    """Compute Veff"""
-    #Seemed to work better (larger p-values) before the weigths dat['WEIGHT'] were inserted.
-    #But actually that should happen as it is the weigthed Veff/Veff,max that should be uniform
-    #not the unweighted one we are testing.
-
-    # To Do:
-    #    i) A rebinned density versus redshift plot to monitor convergence 
-    #   ii) A measure of convergence
-    #
-
-    #We are using V as the radial coordinate with V=0 corresponding to vmin_sample.
-    #But the dat['v'] value of each galaxies is relative to its own dat['vmin'] which for some of the bright galaxies
-    #can be greater than vmin_sample.
-    #So for our V coordinate we have to add back on dat['vmin'] and subtract vmin_sample
-    # Then we also have to take account dat['vmin'] >vmin_sample when placing their clones and computing their final v_eff,max.
-
-    # Set up arrays into which we will put the values per galaxy
-    veff=np.zeros(dat['Z'].size)
-    veff_max=np.zeros(dat['Z'].size)
-    ratio=np.zeros(dat['Z'].size)
-    #dat.add_column(Column(name='veff', data=veff))
-    #dat.add_column(Column(name='veff_max', data=veff_max))
-
-    nsamp=4.0 #over sampling factor
-    nbins=2000 #number of volume bins
-    nzbins=20 #number of redshift bins (just for plots)
-
-    for reg in regions:           #Do regions separately (Would have to define volume bins differently to merge)
-      print('starting region ',reg)
-      regmask=(dat['reg']==reg)#mask to select objects in specified region
-
-      Sel=selection(reg)
-      #minimum vmin for the whole selected sample. We just consider volume above this vmin and work in bins of that covering 0 to vmax-vmin
-      vmin_sample=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(Sel['zmin']).value)**3 
-      
-      vbins=np.linspace(0.0,vmax_sample,nbins) # volume bin edges
-      vbin_width=vbins[1]-vbins[0] #bin width
-      print('vbin_width:',vbin_width*1.0e-09,vmax_sample*1.0e-09/(nbins-1),'(Gpc/h)^3')  
-      vbin_cen=(vbins[:-1]+vbins[1:])/2.0 #volume bin centres
-      Delta_vbin=np.ones(vbin_cen.size)  #Overdensity in each volume bin initialised to uniform density
-      Delta=np.ones(dat['Z'].size)       #Overdensity for each galaxy initialised to uniform density
-      v=np.zeros(dat['Z'].size)          #initialise array for random volume values for each galaxy 
-      zbins=np.linspace(Sel['zmin'],Sel['zmax'],nzbins) # zbin edges (used for plots)
-      zbin_cen=(zbins[:-1]+zbins[1:])/2.0 #zbin centres
-
-      # For top axis of some plots we set up a grid of redshift tick marks and compute their volume coordinate
-      zgrid=np.linspace(0.1,Sel['zmax'],5)
-      zgrid_strings = ["%.1f" % number for number in zgrid] #convert to strings rounded to 1 decimal place
-      vgrid=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(zgrid).value)**3 - vmin_sample
-
-      #Check that data values are all in expected ranges
-      vcheck=  vmax_sample-dat['v'][regmask]
-      if (np.min(vcheck)<0): print('ERROR: object with V>V_max')
-      vcheck=  vbins[nbins-1]- (dat['v'][regmask]+dat['vmin'][regmask]-vmin_sample)
-      if (np.min(vcheck)<0): print('ERROR: object with V+vmin-vmin_sample> largest vbin edge')
-      vcheck=  (dat['v'][regmask]+dat['vmin'][regmask]-vmin_sample)
-      if (np.min(vcheck)<0): print('ERROR: object with V+vmin<vmin_sample')
-      vcheck=  (dat['vmin'][regmask]-vmin_sample)
-      if (np.min(vcheck)<0): print('ERROR: object with vmin<vmin_sample')
-      zcheck=  (dat['zmin'][regmask]-Sel['zmin'])
-      if (np.min(zcheck)<0): print('ERROR: object with zmin<zmin_sample')
-
-      # Plot the number of galaxies per volume  (and redshift) bin  (This will increase towards low volume as there we see fainter galaxies)
-      vhist_dat,vbinss=np.histogram((dat['v'][regmask]+dat['vmin'][regmask]-vmin_sample),bins=vbins,weights=dat['WEIGHT'][regmask]) #data histogram in volume coordinate bins
-      zhist_dat,zbinss=np.histogram(dat['Z'][regmask],bins=zbins,weights=dat['WEIGHT'][regmask])
-
-
-
-      # Set up redshift labels for the top axis
-      ax = host_subplot(211)
-      ax2 = ax.twin()
-      ax2.set_xlabel('$z$')    
-      ax2.xaxis.set_label_position('top') 
-      ax2.set_xticks(vgrid,labels=zgrid_strings)   
-      ax.plot(vbin_cen,np.log10(np.maximum(vhist_dat,1.0e-10)))
-      plt.xlim([0,vmax_sample])  
-      plt.ylim([0,6.0])
-      plt.xlabel('$V /(Mpc/h)^3$')
-      plt.ylabel('$log_{10}$ N(V)')
-      ax3 = host_subplot(212)
-      ax3.plot(zbin_cen,np.log10(np.maximum(zhist_dat,1.0e-10)))
-      plt.xlabel('$z$')
-      plt.ylabel('$log_{10}$ N(z)')
-      plt.show()
-
-      n=np.zeros(dat['Z'].size, dtype=int)        #initialise number of clones of each galaxy to zero
-      iv=np.zeros(dat['Z'].size, dtype=int)       
-      iv[regmask]=np.digitize(dat['v'][regmask]+dat['vmin'][regmask]-vmin_sample,vbins)-1 #find the volume bin index for each galaxy  
-
-      # Set up redshift labels for the top axis
-      ax = host_subplot(111)
-      ax2 = ax.twin()
-      ax2.set_xlabel('$z$')    
-      ax2.xaxis.set_label_position('top') 
-      ax2.set_xticks(vgrid,labels=zgrid_strings)  
-
-
-      for j in range(10): #loop until Deltas converge within Poisson Errors???? -- just loops 6 times for now
-        nmean=nsamp*dat['WEIGHT']/Delta #mean number of times to redistribute each galaxy
-
-        n[regmask]=np.floor(nmean[regmask]).astype(int) #Round down to the nearest integer
-        mask= (np.random.uniform(Delta.size) < nmean-n) #Choose with probability equal to how much nmean exceeds n those for which n is tobe increased by 1
-        cmask=mask&regmask #combined mask for region and those needing extra increment 
-        n[cmask] += 1 # increment if nmean>n with probability such that <n>=nmean for those in the region
-        nmax=n.max() #  the maximum number of times any galaxy will be cloned
-        vhist=np.zeros(vhist_dat.size) # initialize vhist histogram of the number of clones in each volume bin
-        for i in range(nmax): #loop over the maximum number of times we need to clone any galaxy
-            mask= (i<n) #add a clone of all the galaxies that need i or more clones (remember i starts from 0)
-            cmask=mask&regmask #combined region and those needing incrementing mask
-            nclones=np.count_nonzero(cmask) #this is the total number of galaxies we are cloning on this pass
-            # print('pass:',i+1,'of',nmax,' extra clones added:',nclones)
-            v[cmask]=dat[cmask]['vmax']*np.random.uniform(size=nclones)# distribute each clone uniformly within its vmax
-            hist,vbinss=np.histogram(v[cmask]+dat[cmask]['vmin']-vmin_sample,bins=vbins) #bin the clones in volume coordinate bins
-            vhist += hist  # increment the histogram with the clones from this pass
-        # Now we have cloned and binned all the galaxies we can compute the overdensity Delta in each volume coordinate bin    
-        binmask = (vhist>0)  #mask to avoid divide by zero in any bin with no clones 
-        Delta_vbin[binmask]=nsamp*vhist_dat[binmask]/vhist[binmask] #overdensity relative to clones
-        Delta_vbin=Delta_vbin/np.mean(Delta_vbin)  #Renormalize the mean which is necessary as <nmean>.ne.nsamp as <1/Delta>.ne.1
-        print('RMS Delta:',np.sqrt(np.mean(((Delta_vbin-np.mean(Delta_vbin))**2))))
-        plt.plot(vbin_cen,Delta_vbin,label=str(j))# plot overdensity at this iteration  
-        Delta[regmask]=Delta_vbin[iv[regmask]] # update each galaxy's overdensity (for galaxies in the region)
-
-        #Form the cumulative sum of V_eff up to the bin edges vbin. This is exactly what we need for interpolation.
-        veff_bin=np.concatenate((np.array([0.0]),np.cumsum(Delta_vbin)*vbin_width))# cumulative distribution including 0 at first bin edge
-
-        # The first two expressions below would be right if dat['vmin']= vmin_sample but for those with dat['vmin']>vmin_sample we have to make a correction
-        veff[regmask]    =np.interp(dat['v'][regmask]   +dat['vmin'][regmask]-vmin_sample, vbins,veff_bin) #For each galaxy interpolate veff from the cumulative binned values
-        veff_max[regmask]=np.interp(dat['vmax'][regmask]+dat['vmin'][regmask]-vmin_sample, vbins,veff_bin) #The same for each galaxies Vmax value
-        mask=(dat['vmin']>vmin_sample)
-        cmask=mask & regmask  #combined mask for those in the region needing their v_eff correcting as dat['vmin']>vmin_sample
-        veff[cmask]    =veff[cmask]    - np.interp(dat['vmin'][cmask]-vmin_sample, vbins,veff_bin)
-        veff_max[cmask]=veff_max[cmask]- np.interp(dat['vmin'][cmask]-vmin_sample, vbins,veff_bin)  
-        #
-        plt.scatter(dat['v'][regmask],veff[regmask]-dat['v'][regmask], s=0.25)
-        # Go back and do next iteration    
-      #
-      #Finish off the plot to see how well convergence has worked
-      plt.xlim([0,vmax_sample])
-      plt.ylabel('$V_{eff} -V$')
-      plt.xlabel('$V$')
-      ax.legend(loc='upper left')
-      plt.show()
-
-    # Store the veff and veff_max values that are returned and look at their stats
-    dat['veff']=veff
-    dat['veff_max']=veff_max
-    dat.info('stats')  
-
-    # This was meant to be test of V_eff/V_eff,max is more uniform than V/V_max but to do that it needs to take account the weights but currently does not.
-    ratio[regmask]=dat['v'][regmask]/dat['vmax'][regmask]
-    plt.hist(ratio[regmask], bins=nbins, label='$V/V_{max}$',histtype='step')
-    print('V/V_max uniformity',stats.kstest(ratio[regmask],'uniform'))
-    ratio[regmask]=dat['veff'][regmask]/dat['veff_max'][regmask]
-    plt.hist(ratio[regmask], bins=nbins, label='$V_{eff}/V_{eff,max}$',histtype='step')
-    print('V_eff/V_eff,max uniformity',stats.kstest(ratio[regmask],'uniform'))
-    plt.xlabel('$V_{eff}/V_{eff,max}$')
-    plt.xlim([0,1.0])
-    plt.legend()
-    plt.show()
-
-   
-    return
 
 
 
@@ -1553,8 +1764,8 @@ def compute_veff(dat,regions):
 
 # The basic idea is V_eff= integral  Delta(z) dV/dz  dz  where the overdensity Delta(z) is estimated 
 # by making clones of galaxies and redistributing them withing their V_max volume to define a smooth dN/dz
-# from which can be compared with the actual dN/dz to define the run overdensity with redshift.
-# This version using log binning
+# from which can be compared with the actual dN/dz to define the run of overdensity with redshift.
+# This version uses bins uniformly spaced in log(vol(<z)).
 
 def compute_veff_logspacing(dat,regions):
     """Compute Veff using log-spaced distance bins (preferred)"""
@@ -1661,7 +1872,7 @@ def compute_veff_logspacing(dat,regions):
         nmean=nsamp*dat['WEIGHT']/dat['Delta'] #mean number of times to redistribute each galaxy
 
         n[regmask]=np.floor(nmean[regmask]).astype(int) #Round down to the nearest integer
-        mask= (np.random.uniform(dat['Delta'].size) < nmean-n) #Choose with probability equal to how much nmean exceeds n those for which n is to be increased by 1
+        mask= (np.random.uniform(size=dat['Delta'].size) < nmean-n) #Choose with probability equal to how much nmean exceeds n those for which n is to be increased by 1
         cmask=mask&regmask #combined mask for region and those needing extra increment 
         n[cmask] += 1 # increment if nmean>n with probability such that <n>=nmean for those in the region
         nmax=n.max() #  the maximum number of times any galaxy will be cloned

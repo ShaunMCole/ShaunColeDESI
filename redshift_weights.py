@@ -137,7 +137,7 @@ def assign_redshift_weight(dat,regions,add_sys=False,plot=False):
 # Construct a table of the redshift completeness in bins of fib_rmag and TSNR2_BGS and define a redshift completeness weight by its inverse
 #
 
-def construct_weight_table(clus, observed, zgood, plot=True):
+def construct_weight_table(clus, full, observed, zgood, plot=True):
 
    
     
@@ -154,9 +154,11 @@ def construct_weight_table(clus, observed, zgood, plot=True):
     print('Number of bins in fibmag and TSNR2_BGS used in weight look-up table. nx,ny:',nx,ny)
    
     #From the observed table add TNSR2_BGS and fib_mag to the clus table
-    obs = observed['TARGETID', 'TSNR2_BGS', 'fib_rmag']
+    obs = observed['TARGETID', 'TSNR2_BGS', 'fib_rmag'].copy()
+    print('clus size:',len(clus))
     clus = join(clus, obs, keys='TARGETID')
-
+    print('clus size after adding TSNR2_BGS and fib_mag from observed:',len(clus))
+    
     regions = ['N', 'S'] # Loop over regions so that we deal with each separately
 
     for reg in regions:
@@ -190,6 +192,7 @@ def construct_weight_table(clus, observed, zgood, plot=True):
 
         # Make a plot of the completeness look-up table with the catalogue points overlaid
         if plot:
+                
                 print('The following plots are the raw look-up table and as seen with CIC interpolation:')
                 XXg, YYg = np.meshgrid(xbins, ybins)
                 fig = plt.figure(figsize = (13,7))
@@ -197,11 +200,15 @@ def construct_weight_table(clus, observed, zgood, plot=True):
                 plot1 = ax1.pcolormesh(XXg,YYg,H.T, vmin=0.2)
                 cbar = plt.colorbar(plot1,ax=ax1, pad = .015, aspect=10)
                 plt.scatter(zgood[zgoodmask]['TSNR2_BGS'],zgood[zgoodmask]['fib_rmag'], marker='.',linewidth=0,s=0.1,alpha=0.1,c='red')
-                plt.xlabel('TSNR2_BGS')
-                plt.ylabel('r_fibre')
+                # Additionally overplot the very faintest galaxies more prominently.
+                faint = (clus['ABSMAG_RP1']>-13.0)
+                print('faint sample:',clus[faint]['TSNR2_BGS'],clus[faint]['fib_rmag'])
+                plt.scatter(clus[faint]['TSNR2_BGS'],clus[faint]['fib_rmag'],linewidth=1,s=1.0,alpha=1.0,c='cyan')
+                plt.xlabel('TSNR2\_BGS')
+                plt.ylabel('$r_{fibre}$')
                 plt.xlim([1000.0,4000.0])
                 plt.ylim([14.0,23.0])
-                plt.show()
+                plt.show() 
                 
                 
                 # An attempt to visualise CiC lookup on a finer grid
@@ -234,15 +241,24 @@ def construct_weight_table(clus, observed, zgood, plot=True):
                 # Form the CIC weighted value and make its inverse the weight
                 FH =  wa*Harray[i2[0],i2[1]]+wb*Harray[j2[0],i2[1]]+wc*Harray[i2[0],j2[1]]+wd*Harray[j2[0],j2[1]] 
                 FH=FH.reshape(nm*ny+1,nm*nx+1)
-                fig = plt.figure(figsize = (13,7))
+                fig = plt.figure(figsize=(5.4, 4.5))
                 ax1=plt.subplot(111)
                 plot1 = ax1.pcolormesh(XXg,YYg,FH, vmin=0.2)
                 cbar = plt.colorbar(plot1,ax=ax1, pad = .015, aspect=10)
+                cbar.set_label('Good Redshift Fraction', rotation=90, labelpad=15)
                 plt.scatter(zgood[zgoodmask]['TSNR2_BGS'],zgood[zgoodmask]['fib_rmag'], marker='.',linewidth=0,s=0.1,alpha=0.1,c='red')
-                plt.xlabel('TSNR2_BGS')
-                plt.ylabel('r_fibre')
+                faint = (clus['ABSMAG_RP1']>-13.0) & (clus['fib_rmag']>20)
+                print('faint sample:',clus[faint]['TSNR2_BGS'],clus[faint]['fib_rmag'])
+                plt.scatter(clus[faint]['TSNR2_BGS'],clus[faint]['fib_rmag'],linewidth=0.5,s=0.5,alpha=1.0,c='cyan')
+                thin =( np.random.rand(clus['fib_rmag'].size)>0.8)
+                faint = (clus['fib_rmag']<20) & (clus['fib_rmag']>19) & (clus['ABSMAG_RP1']>-13.0) & thin
+                plt.scatter(clus[faint]['TSNR2_BGS'],clus[faint]['fib_rmag'],linewidth=0.5,s=0.5,alpha=1.0,c='cyan')
+            
+                plt.xlabel(r'$TSNR2\_BGS$')
+                plt.ylabel('$r_{fibre}$')
                 plt.xlim([1000.0,4000.0])
                 plt.ylim([14.0,23.0])
+                plt.savefig('Fig2.png',dpi=600)
                 plt.show()
 
         # save the look-up table for future use

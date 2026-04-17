@@ -2,6 +2,11 @@ Shaun Cole's collection of code for DESI Analysis
 
 This is backed up in the following GitHub Repository: git@github.com:ShaunMCole/ShaunColeDESI.git
 
+Useful git commnands:
+git status
+git add     # to add files to the list waiting to be comitted
+
+
 Collections of Python functions:
    catalogue_analysis.py   -- wide collection of python code for analysing galaxy catalogues including estimating luminosity functions
    rootfinders.py          -- rootfinder to find the roots of a vector of equations such as finding zmax for a catalogue of galaxies  
