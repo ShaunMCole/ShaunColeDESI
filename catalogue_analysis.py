@@ -1,20 +1,24 @@
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import host_subplot
 import kcorrections as k
+from kcorrections import DESI_KCorrection
 import numpy as np
 from scipy import stats
 import astropy.units as u
 import fitsio
 from astropy.table import join,Table,Column,vstack
 from astropy.coordinates import SkyCoord
-from kcorrections  import DESI_KCorrection 
 from rootfinders import root_itp,root_sec,root_itp2
-from astropy.cosmology import FlatLambdaCDM
+from cosmology import cosmo
 from astropy.io import fits
 from scipy.ndimage import gaussian_filter
-from scipy.interpolate import RegularGridInterpolator
+from scipy.interpolate import RegularGridInterpolator,SmoothBivariateSpline, BSpline, interp1d
+from scipy.optimize import brentq
+from scipy.special import logsumexp, logit, erf, expit
+from collections import defaultdict
 from desiutil.plots import prepare_data, init_sky, plot_grid_map, plot_healpix_map, plot_sky_circles, plot_sky_binned
-cosmo = FlatLambdaCDM(H0=100, Om0=0.313, Tcmb0=2.725)   #Standard Planck Cosmology in Mpc/h units
+
+
 
 import warnings
 warnings.filterwarnings('ignore', module='astropy.io.fits')
@@ -38,10 +42,10 @@ def selection(reg):
     area_S_Y1=5358.2728/(4*np.pi*(180.0/np.pi)**2)
     area_N_Y3=3827.50/(4*np.pi*(180.0/np.pi)**2) #from assuming 2500 randoms/sqdeg in catalog 0 
     area_S_Y3=8527.58/(4*np.pi*(180.0/np.pi)**2)
-    South={'zmin': 0.002, 'zmax': 0.6, 'bright': 0.0, 'faint': 19.5 ,\
+    South={'zmin': 0.01, 'zmax': 0.5, 'bright': 0.0, 'faint': 19.5,\
           'area': area_S_Y3, 'col': 'red' , 'style': 'solid', 'f_ran': f_ran,\
           'Qevol': Qevol, 'Qg': Qg, 'Qr': Qr, 'Qz': Qz, 'Qw1': Qw1}
-    North={'zmin': 0.002, 'zmax': 0.6, 'bright': 0.0, 'faint': 19.54,\
+    North={'zmin': 0.01, 'zmax': 0.5, 'bright': 0.0, 'faint': 19.54,\
           'area': area_N_Y3, 'col': 'blue', 'style': 'dashed', 'f_ran': f_ran,\
           'Qevol': Qevol, 'Qg': Qg, 'Qr': Qr, 'Qz': Qz, 'Qw1': Qw1}
     if (reg=='N'):
@@ -298,10 +302,10 @@ def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
         GMR_red=1.1*np.ones(nzslices)
         kcorr_r  = DESI_KCorrection(band='R', file='jmext', photsys=reg) # Set up k-correction for this photometric region
         
-        bright_bound_red[ireg,:]= ABSMAG(Sel['bright'],zbin_edges[:-1],GMR_red,kcorr_r,Sel['Qevol']) #bright limit set by low redshift edge of the slice
-        faint_bound_red[ireg,:]=  ABSMAG(Sel['faint'],zbin_edges[1:],GMR_red,kcorr_r,Sel['Qevol'])   #faint limit set by high redshift edge of the slice
-        bright_bound_blue[ireg,:]= ABSMAG(Sel['bright'],zbin_edges[:-1],GMR_blue,kcorr_r,Sel['Qevol']) #bright limit set by low redshift edge of the slice
-        faint_bound_blue[ireg,:]=  ABSMAG(Sel['faint'],zbin_edges[1:],GMR_blue,kcorr_r,Sel['Qevol'])   #faint limit set by high redshift edge of the slice
+        bright_bound_red[ireg,:]= k.ABSMAG(Sel['bright'],zbin_edges[:-1],GMR_red,kcorr_r,Sel['Qevol']) #bright limit set by low redshift edge of the slice
+        faint_bound_red[ireg,:]=  k.ABSMAG(Sel['faint'],zbin_edges[1:],GMR_red,kcorr_r,Sel['Qevol'])   #faint limit set by high redshift edge of the slice
+        bright_bound_blue[ireg,:]= k.ABSMAG(Sel['bright'],zbin_edges[:-1],GMR_blue,kcorr_r,Sel['Qevol']) #bright limit set by low redshift edge of the slice
+        faint_bound_blue[ireg,:]=  k.ABSMAG(Sel['faint'],zbin_edges[1:],GMR_blue,kcorr_r,Sel['Qevol'])   #faint limit set by high redshift edge of the slice
         faint_bound[ireg,:]=np.minimum(faint_bound_red[ireg,:],faint_bound_blue[ireg,:]) #store the most restrictive of the two
         bright_bound[ireg,:]=np.maximum(bright_bound_red[ireg,:],bright_bound_blue[ireg,:])#store the most restrictive of the two
         #print('bright_bound_red',bright_bound_red[ireg,:])
@@ -338,8 +342,8 @@ def redshiftslices(dat,zbin_edges,regions,plotfrac=0.2):
         plt.scatter(dat['Z'][rmask],dat['ABSMAG_RP1'][rmask],marker=',',lw=0,s=0.1,c=10-dat['izbin'][rmask],cmap='inferno',label=reg)
         plt.scatter(dat['Z'][vlrmask],dat['ABSMAG_RP1'][vlrmask],marker=',',lw=0,s=0.1,c=dat['izbin'][vlrmask],cmap='jet')
         plt.xlim(0.0,0.6)
-        plt.xlabel('$z$')
-        plt.ylabel('$M_r$')
+        plt.xlabel(r'$z$')
+        plt.ylabel(r'$M_r$')
         plt.legend(loc='upper right')
         plt.show()
 
@@ -427,7 +431,7 @@ def solve_jackknife_nonsq(data, ndiv_ra=4, ndiv_dec=5, offset=275):
             declow  = np.percentile(data[f'DEC'][isin], dec_per - dpercentile_dec)
 
             #print('processing dec band:')
-            #print('\t{:.6f}\t{:.6f}'.format(declow, dechigh))
+            #print(r'\t{:.6f}\t{:.6f}'.format(declow, dechigh))
 
             #store the limits of this band in the limits table 
             limits['ralow'][jk]   = ralow
@@ -598,21 +602,69 @@ def v_flow(ra,dec,distance):
 
     
 
-# ABSMAG_R= appmag -DMOD(zcos)  -kcorr_r.k(z, rest_GMR) +Qevol*(zcos-0.1) 
-def ABSMAG(appmag,z,rest_GMR,kcorr_r,Qevol,zcos=None):
-        """Compute absolute magnitude taking into account k-correction and evolution parameterized by Qevol.
-        The optional zcos argument allows the cosmological (pure hubble flow) redshift to be used for the DMOD and evolutionary correction while the kcorrection uses the default/measured redshift"""
-        if zcos is None:
-            zcos = z
-        else:
-            print('Using cosmological redshift for distance modulus and evolution terms')
-            rms = np.sqrt(np.mean((z-zcos)**2))
-            print('rms difference between z and zcos=',rms)
-                  
-        DMOD=25.0+5.0*np.log10(cosmo.luminosity_distance(zcos).value)  
-        ABSMAG=appmag-DMOD-kcorr_r.k(z,rest_GMR)+Qevol*(zcos-0.1)
-        return ABSMAG
+
+
+# Function that defines the absolute magnitude that corresponds to the faint apparent magnitude limit of the survey (here the default is 19.5 but can be changed)
+# given the colour and redshift of the galaxy
+def Mr_limit(z, rest_GMR, kcorr_r, mlim=19.5, Qevol=0.78):
+    """
+    Example: DESI BGS absolute magnitude limit
+    including colour-dependent K-correction and single e-correction
+    """
     
+    # convert to arrays even when called with scalar values so that kcorr_r() doesn't object
+    z_arr   = np.atleast_1d(z)
+    c_arr   = np.atleast_1d(rest_GMR)
+
+    DMOD=25.0+5.0*np.log10(cosmo.luminosity_distance(z_arr).value)  
+
+    
+    MLIM=mlim-DMOD-kcorr_r.k(z_arr,c_arr)+Qevol*(z-0.1)
+    return MLIM
+
+
+
+
+# Function to compute the limiting colours at which a galaxy of this magnitude makes the selection at this redshift
+def col_limit(z, Mr, kcorr_r, cmin=0.0, cmax=1.5, mlim=19.5):
+    """
+    Solve M_r = M_lim(z, c) for c.
+    """
+    # ensure z and Mr are scalar floats as required by brentq()
+    z = float(z)
+    Mr = float(Mr)
+
+    # function whose root we find 
+    # i.e. when does the absolute magnitude implied by the apparent magnitude limit equal the absolute magnitude of the galaxy in question
+    def f(c):
+        return Mr - Mr_limit(z, c, kcorr_r, mlim=mlim)
+
+    # We first have to see if the extremes of the colour distribution bracket the root.
+    # They may not as either all or no galaxies of this absolute magnitude at this redshift may be bright enough for selection regardless of their colour.
+    fa = f(cmin)
+    fb = f(cmax)
+
+    # Root exists in the interval so we find the root and return the limiting colour
+    if fa * fb < 0.0:
+        return brentq(f, cmin, cmax)
+
+    # No root: handle gracefully
+    if fa > 0.0 and fb > 0.0:
+        # Fainter than limit throughout → limiting colour is bluest
+        return cmin
+
+    if fa < 0.0 and fb < 0.0:
+        # Brighter than limit throughout → limiting colour is reddest
+        return cmax
+
+    # Extremely rare edge case: exactly on the boundary
+    if fa == 0.0:
+        return cmin
+    if fb == 0.0:
+        return cmax
+
+    # Fallback (should not occur)
+    return np.nan
 # Make plots of the k-corrections to check they are sensible and smooth in both redshift and colour
 def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True, forceN=False):
     """Assign restframe colours from g-r vs redshift lookup table and ABSMAG using k-correction polynomials"""
@@ -644,19 +696,19 @@ def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True, forceN=Fals
 
       # call to assign k-corrected magnitudes in the W1-band  
       kcorr_rM  = DESI_KCorrection(band='W1', file='jmext', photsys=lookupreg) #set k-correction for region
-      dat['ABSMAG_W1P1'][regmask]=ABSMAG(dat['w1mag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qw1'],zcos=dat['Zcos'][regmask])
+      dat['ABSMAG_W1P1'][regmask]=k.ABSMAG(dat['w1mag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qw1'],zcos=dat['Zcos'][regmask])
       
       # call to assign k-corrected magnitudes in the z-band
       kcorr_rM  = DESI_KCorrection(band='Z', file='jmext', photsys=lookupreg) #set k-correction for region
-      dat['ABSMAG_ZP1'][regmask]=ABSMAG(dat['zmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qz'],zcos=dat['Zcos'][regmask])  
+      dat['ABSMAG_ZP1'][regmask]=k.ABSMAG(dat['zmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qz'],zcos=dat['Zcos'][regmask])  
 
       # call to assign k-corrected magnitudes in the r-band  
       kcorr_rM  = DESI_KCorrection(band='R', file='jmext', photsys=lookupreg) #set k-correction for region
-      dat['ABSMAG_RP1'][regmask]=ABSMAG(dat['rmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qevol'],zcos=dat['Zcos'][regmask])
+      dat['ABSMAG_RP1'][regmask]=k.ABSMAG(dat['rmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qevol'],zcos=dat['Zcos'][regmask])
 
       # call to assign k-corrected magnitudes in the g-band
       kcorr_rM  = DESI_KCorrection(band='G', file='jmext', photsys=lookupreg) #set k-correction for region
-      dat['ABSMAG_GP1_gk'][regmask]=ABSMAG(dat['gmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qg'],zcos=dat['Zcos'][regmask])
+      dat['ABSMAG_GP1_gk'][regmask]=k.ABSMAG(dat['gmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qg'],zcos=dat['Zcos'][regmask])
       dat["ABSMAG_GP1"][regmask]=dat["ABSMAG_RP1"][regmask]+dat["REST_GMR_0P1"][regmask] + (Sel['Qg']-Sel['Qevol'])*(dat['Z'][regmask]-0.1)
         
       #Following Call is probably not needed but resets kcorr_rM t the r band as it was before this code computed g, z, and w1 absolute magnitudes
@@ -775,7 +827,7 @@ def compute_zmax(dat,regions,forceN=False):
 #Compute v, vmin and vmax variables from the z, zmin and zmax and the area of the corresponding region.
 # optionally if zsplit>0 split the sample at this redshift and set vmin and vmax according to which sample the galaxy lies
 #Also optionally if dz>0 additionally define windowed zwinmin, zwinmax and corresponding vminmin, ,vwin, vwinmax used in defining veff and random catalogues
-def add_vminvmax(dat,regions, zsplit=0.0, dz=0):
+def add_vminvmax(dat,regions, zsplit=0.0, dz=0, silent=False):
     #If selected defined the windowed zwinmin, zwinmax and corresponding volume coordinates
     if (dz>0) :
         dat['zwinmin'] = np.clip(dat['zmin'], a_min=dat['Z']-dz, a_max=np.inf)
@@ -784,7 +836,7 @@ def add_vminvmax(dat,regions, zsplit=0.0, dz=0):
         vmin=np.zeros(dat['Z'].size) # set up array ready to receive vmin values
         v=np.zeros(dat['Z'].size) # v values
         for reg in regions:
-            print('For redshift windows: starting region ',reg)
+            if ~silent: print('For redshift windows: starting region ',reg)
             Sel=selection(reg) # define selection
             regmask=(dat['reg']==reg)#mask to select objects in specified region
             vmin[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zwinmin'][regmask]).value)**3 
@@ -805,7 +857,7 @@ def add_vminvmax(dat,regions, zsplit=0.0, dz=0):
     vmin=np.zeros(dat['Z'].size) # set up array ready to receive vmin values
     v=np.zeros(dat['Z'].size) # v values
     for reg in regions:
-        print('starting region ',reg)
+        if not silent: print('starting region ',reg)
         Sel=selection(reg) # define selection
         regmask=(dat['reg']==reg)#mask to select objects in specified region
         vmin[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zmin'][regmask]).value)**3 
@@ -814,9 +866,9 @@ def add_vminvmax(dat,regions, zsplit=0.0, dz=0):
         
     # If select split sample into two redshift bins at zsplit
     if (zsplit>0.0):
-     print('Splitting the sample into two redshift bins at z_split=',zsplit)   
+     if not silent: print('Splitting the sample into two redshift bins at z_split=',zsplit)   
      for reg in regions:   
-        print('starting region ',reg)
+        if ~silent: print('starting region ',reg)
         Sel=selection(reg) # define selection
         regmask=(dat['reg']==reg) & (dat['Z']<=zsplit) #mask to select objects in specified region and z<zsplit
         vmin[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zmin'][regmask]).value)**3 
@@ -876,8 +928,8 @@ def plot_zmax_absmag(dat):
     plt.scatter(dat['ABSMAG_RP1'],dat['zmax'], marker='.', c=col ,cmap=cmap, linewidths=0,s=0.25,alpha=0.2,label='colour coded by rest frame colour')
     plt.xlim([-12,-23])
     plt.ylim([0.0,0.62])
-    plt.ylabel('$z_{max}$')
-    plt.xlabel('$M_r - 5 \log h$')
+    plt.ylabel(r'$z_{max}$')
+    plt.xlabel(r'$M_r - 5 \log h$')
     plt.legend()
     plt.show()
     return
@@ -892,8 +944,8 @@ def plot_zmin_absmag(dat):
     plt.scatter(dat['ABSMAG_RP1'],dat['zmin'], marker='.', c=col ,cmap=cmap, linewidths=0,s=0.25,alpha=0.2,label='colour coded be rest-frame colour')
     plt.xlim([-12,-23])
     #plt.ylim([0.0,0.1])
-    plt.ylabel('$z_{min}$')
-    plt.xlabel('$M_r - 5 \log h$')
+    plt.ylabel(r'$z_{min}$')
+    plt.xlabel(r'$M_r - 5 \log h$')
     plt.legend()
     plt.show()
     return
@@ -1105,7 +1157,7 @@ def plot_col_mag(dat,regions):
 
 
     range[1].reverse()  #flip the Absolute magnitude axes direction
-    axcolmag.set(xlabel='$M_g - M_r$', ylabel='$M_r -5 \log h$',xlim=range[0],ylim=range[1])
+    axcolmag.set(xlabel=r'$M_g - M_r$', ylabel=r'$M_r -5 \log h$',xlim=range[0],ylim=range[1])
     Sel=selection('N')
     colN=Sel['col']
     Sel=selection('S')
@@ -1195,7 +1247,7 @@ def plot_col_mag_withvmax(dat,regions):
 
 
     range[1].reverse()  #flip the Absolute magnitude axes direction
-    axcolmag.set(xlabel='$M_g - M_r$', ylabel='$M_r -5 \log h$',xlim=range[0],ylim=range[1])
+    axcolmag.set(xlabel=r'$M_g - M_r$', ylabel=r'$M_r -5 \log h$',xlim=range[0],ylim=range[1])
     Sel=selection('N')
     colN=Sel['col']
     Sel=selection('S')
@@ -1213,10 +1265,13 @@ def sky_plot(dat,regions):
     """All-sky scatter plot with galactic plane and ecliptic marked"""
     # All-sky scatter plot with galactic plane and ecliptic marked
     ax= init_sky()
-    for reg in regions:
-        regmask = (dat['reg']==reg)
-        Sel=selection(reg) # define selection parameters for this region
-        p = ax.scatter(ax.projection_ra(dat['RA'][regmask]),ax.projection_dec(dat['DEC'][regmask]),color=Sel['col'],s=0.25, marker='.', linewidths=0)
+    if "reg" in dat.colnames:
+        for reg in regions:
+            regmask = (dat['reg']==reg)
+            Sel=selection(reg) # define selection parameters for this region
+            p = ax.scatter(ax.projection_ra(dat['RA'][regmask]),ax.projection_dec(dat['DEC'][regmask]),color=Sel['col'],s=0.25, marker='.', linewidths=0)
+    else:
+        p = ax.scatter(ax.projection_ra(dat['RA']),ax.projection_dec(dat['DEC']),color='green',s=0.25, marker='.', linewidths=0)
 
 
     # healpix source density map in healpix's of less than max_bin_area sq degrees
@@ -1245,7 +1300,10 @@ def sky_plot_jack(dat):
 def cone_plot(dat,regions):
     """This is hardwired to produce two particular cone plots but could be adapted"""
     for reg in regions:
-        regmask = (dat['reg']==reg)
+        if "reg" in dat.colnames:
+            regmask = (dat['reg']==reg)
+        else:
+            regmask = (dat['rmag']<100) #always true 
         Sel=selection(reg) # define selection parameters for this region
         # Selection to remove stars and impose chosen magnitude limit
         if (reg=='S'):
@@ -1472,8 +1530,8 @@ def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='r', plot=True, saveplot
     
     if plot and not ratio:
         plt.plot(bin_cen,log_phi_sch, label='Reference Schechter Function')
-        plt.xlabel('$M_r - 5 log h$')
-        plt.ylabel('$log_{10} \phi(M_r)\quad  [mag^{-1} (Mpc/h)^{-3}]$')
+        plt.xlabel(r'$M_r - 5 log h$')
+        plt.ylabel(r'$log_{10} \phi(M_r)\quad  [mag^{-1} (Mpc/h)^{-3}]$')
         plt.xlim([-26,-7.5])
         plt.ylim([-7,1.0])
         # place some vertical lines on the plot at the positions passed in as limits
@@ -1494,8 +1552,8 @@ def lumfun_vmax(dat,regions, bandmag='ABSMAG_RP1', band='r', plot=True, saveplot
             plt.savefig(spath)
 
     if plot and ratio:
-        plt.xlabel('$M_r - 5 log h$')
-        plt.ylabel('$log_{10} \phi(M_r)/\phi_{ref}(M_r) \quad  [mag^{-1} (Mpc/h)^{-3}]$')
+        plt.xlabel(r'$M_r - 5 log h$')
+        plt.ylabel(r'$log_{10} \phi(M_r)/\phi_{ref}(M_r) \quad  [mag^{-1} (Mpc/h)^{-3}]$')
         plt.xlim([-25,-9])
         plt.ylim([-0.3,+0.5])
         plt.show()
@@ -1557,9 +1615,9 @@ def lumfun_swml(dat,regions,log_phi_guess,magbins,band='r'):
 
       
         # Compute the absolute faint magnitude limit at the redshift of the galaxy using its k-correction
-        absmag_faint[mask] = ABSMAG(Sel['faint'],dat['Z'][mask],dat['REST_GMR_0P1'][mask],kcorr_r,Sel['Qevol'],zcos=dat['Zcos'][mask])  
+        absmag_faint[mask] = k.ABSMAG(Sel['faint'],dat['Z'][mask],dat['REST_GMR_0P1'][mask],kcorr_r,Sel['Qevol'],zcos=dat['Zcos'][mask])  
         # Compute the absolute bright magnitude limit at the redshift of the galaxy using its k-correction
-        absmag_bright[mask] = ABSMAG(Sel['bright'],dat['Z'][mask],dat['REST_GMR_0P1'][mask],kcorr_r,Sel['Qevol'],zcos=dat['Zcos'][mask])  
+        absmag_bright[mask] = k.ABSMAG(Sel['bright'],dat['Z'][mask],dat['REST_GMR_0P1'][mask],kcorr_r,Sel['Qevol'],zcos=dat['Zcos'][mask])  
         if extra_plots:
             plt.scatter(dat['Z'][mask],absmag_faint[mask], marker='.', linewidths=0, s=0.25, alpha=0.5,label='faint') # quick look to see if reasonable
             plt.scatter(dat['Z'][mask],absmag_bright[mask], marker='.', linewidths=0, s=0.25, alpha=0.5,label='bright') # quick look to see if reasonable
@@ -1631,8 +1689,8 @@ def lumfun_swml(dat,regions,log_phi_guess,magbins,band='r'):
     log_phi_sch = np.log10(phi_sch)
     plt.plot(magbins,log_phi_sch, label='Reference Schechter Function')
 
-    plt.xlabel('$M_r - 5 log h$')
-    plt.ylabel('$\phi(M_r)\quad  [mag^{-1} (Mpc/h)^{-3}]$')
+    plt.xlabel(r'$M_r - 5 log h$')
+    plt.ylabel(r'$\phi(M_r)\quad  [mag^{-1} (Mpc/h)^{-3}]$')
     plt.xlim([-26,-7.5])
     plt.ylim([-7.0,1.0])
     plt.legend()
@@ -1918,15 +1976,15 @@ def compute_veff_logspacing(dat,regions):
     
       # Plot of Delta versus absolute magnitude and Delta versus redshift which should enable understanding of how this LF estimate differs from 1/Vmax
       plt.scatter(dat['ABSMAG_RP1'][regmask],dat['Delta'][regmask],marker='.', linewidths=0, s=0.25, alpha=0.5, label=reg, color=Sel['col'])
-      plt.xlabel('$M_r-5 \log h$')
-      plt.ylabel('$\Delta$')
+      plt.xlabel(r'$M_r-5 \log h$')
+      plt.ylabel(r'$\Delta$')
       plt.ylim([0.0,6.0])
       plt.legend()
       plt.show()
     
       plt.scatter(dat['Z'][regmask],dat['Delta'][regmask],marker='.', linewidths=0, s=0.25, alpha=0.5, label=reg, color=Sel['col'])
-      plt.xlabel('z')
-      plt.ylabel('$\Delta$')
+      plt.xlabel(r'z')
+      plt.ylabel(r'$\Delta$')
       plt.ylim([0.0,6.0])
       plt.legend()
       plt.show()
@@ -1950,15 +2008,15 @@ def compute_veff_logspacing(dat,regions):
     
     # Plot of Delta versus absolute magnitude and Delta versus redshift which should enable understanding of how this LF estimate differs from 1/Vmax
     plt.scatter(dat['ABSMAG_RP1'][regmask],dat['Delta'][regmask],marker='.', linewidths=0, s=0.25, alpha=0.5, label=reg, color=Sel['col'])
-    plt.xlabel('$M_r-5 \log h$')
-    plt.ylabel('$\Delta$')
+    plt.xlabel(r'$M_r-5 \log h$')
+    plt.ylabel(r'$\Delta$')
     plt.ylim([0.0,6.0])
     plt.legend()
     plt.show()
     
     plt.scatter(dat['Z'][regmask],dat['Delta'][regmask],marker='.', linewidths=0, s=0.25, alpha=0.5, label=reg, color=Sel['col'])
-    plt.xlabel('z')
-    plt.ylabel('$\Delta$')
+    plt.xlabel(r'z')
+    plt.ylabel(r'$\Delta$')
     plt.ylim([0.0,6.0])
     plt.legend()
     plt.show()
@@ -2035,17 +2093,17 @@ def remap_rmags(dat,colcut=0.8,plot=True):
     print('Maximum and minimum magnitude difference substracted from S to debias photometry:',magdiff_max,magdiff_min)
     if (plot):
         print('Show mag shifts including those that are capped.')
-        plt.scatter(magdiff,newabsmag+magdiff,color='black',marker=',',lw=0,s=1,alpha=0.01,label='-0.35<$\Delta M_r>0.0$')
+        plt.scatter(magdiff,newabsmag+magdiff,color='black',marker=',',lw=0,s=1,alpha=0.01,label=r'-0.35<$\Delta M_r>0.0$')
         # Extreme positive values
         emask=(magdiff>0.0)
-        plt.scatter(magdiff[emask],newabsmag[emask]+magdiff[emask],marker=',',lw=0,s=1,alpha=0.01,color='blue',label='$\Delta M_r>0$')
+        plt.scatter(magdiff[emask],newabsmag[emask]+magdiff[emask],marker=',',lw=0,s=1,alpha=0.01,color='blue',label=r'$\Delta M_r>0$')
         #print('extreme positive(magdiff,newabsmag):',magdiff[emask],newabsmag[emask])
          # Extreme negative values
         emask=(magdiff<-0.35)
         #print('extreme negative(magdiff,newabsmag):',magdiff[emask],newabsmag[emask])
-        plt.scatter(magdiff[emask],newabsmag[emask]+magdiff[emask],marker=',',lw=0,s=1,alpha=0.01,color='red',label='$\Delta M_r<-0.35$')
-        plt.ylabel('Original $M_r$')
-        plt.xlabel('$\Delta M_r$')
+        plt.scatter(magdiff[emask],newabsmag[emask]+magdiff[emask],marker=',',lw=0,s=1,alpha=0.01,color='red',label=r'$\Delta M_r<-0.35$')
+        plt.ylabel(r'Original $M_r$')
+        plt.xlabel(r'$\Delta M_r$')
         plt.legend()
         plt.show()
     #
@@ -2057,7 +2115,7 @@ def remap_rmags(dat,colcut=0.8,plot=True):
     magdiff_min=np.amin(magdiff)
     print('After clipping: Maximum and minimum magnitude difference substracted from S to debias photometry:',magdiff_max,magdiff_min)
     plt.hist(magdiff,bins=100)
-    plt.xlabel('$\Delta M_r$')
+    plt.xlabel(r'$\Delta M_r$')
     plt.show()
     #Update the absolute magnitude and the corresponding apparent magntudes to keep the colours unchanged
     dat['ABSMAG_RP1'][smask]=newabsmag
@@ -2187,7 +2245,7 @@ def remapfsf_rmags(fsf,plot=True):
     # and update both the colour and derived k correction to match
     magdiff=fsf['ABSMAG01_SDSS_G'][mask]-newcol -fsf['ABSMAG01_SDSS_R'][mask]
     plt.hist(magdiff,bins=100)
-    plt.xlabel('$\Delta M_r$')
+    plt.xlabel(r'$\Delta M_r$')
     plt.show()
     fsf['ABSMAG01_SDSS_R'][mask]=fsf['ABSMAG01_SDSS_G'][mask]-newcol 
     fsf['REST_GMR_0P1'][mask]=fsf['ABSMAG01_SDSS_G'][mask]-fsf['ABSMAG01_SDSS_R'][mask]
@@ -2319,10 +2377,12 @@ def plot_dndz(dat,regions):
                dndz_jack[jjack,:]=(dndz_jack[jjack,:]/dz)*(njack/(njack-1))/(Sel['area']*(4*np.pi*(180.0/np.pi)**2))   # rescale to account for the missing region and area in sq deg and bin width          
            dndz_mean=np.mean(dndz_jack,axis=0) #compute the mean over the jackknife samples
            dndz_err=np.std(dndz_jack,axis=0)*np.sqrt(njack-1) # jackknife rescaling factor as np.std()'s default is ddof=0
-           dndz_low=dndz-dndz_err
-           dndz_hi =dndz+dndz_err
-           bin_cen= (binz[1:]+binz[:-1])/2.0
-           plt.fill_between(bin_cen,dndz_low,dndz_hi,color=Sel['col'],alpha=0.5,label=reg)
+        else:
+           dndz_err=0.0
+        dndz_low=dndz-dndz_err
+        dndz_hi =dndz+dndz_err
+        bin_cen= (binz[1:]+binz[:-1])/2.0
+        plt.fill_between(bin_cen,dndz_low,dndz_hi,color=Sel['col'],alpha=0.5,label=reg)
     plt.ylabel('$dN_{sq deg}/dz$')        
     plt.xlabel('$z$')        
     plt.xlim(0.0,0.6) 
@@ -2426,4 +2486,4 @@ def link_indices_by_key(table1, table2, key='TARGETID', assume_unique=True):
             mapped_lists[i_row] = list(sort_idx[l:r])
 
         return mapped_lists, matches
-    
+

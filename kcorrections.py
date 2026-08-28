@@ -2,9 +2,24 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
 from astropy.table import Table, join
-import catalogue_analysis as ca
+from scipy.interpolate import interp1d
+from cosmology import cosmo
 
-
+# ABSMAG_R= appmag -DMOD(zcos)  -kcorr_r.k(z, rest_GMR) +Qevol*(zcos-0.1) 
+def ABSMAG(appmag,z,rest_GMR,kcorr_r,Qevol,zcos=None):
+        """Compute absolute magnitude taking into account k-correction and evolution parameterized by Qevol.
+        The optional zcos argument allows the cosmological (pure hubble flow) redshift to be used for the DMOD and evolutionary correction while the kcorrection uses the default/measured redshift"""
+        if zcos is None:
+            zcos = z
+        else:
+            print('Using cosmological redshift for distance modulus and evolution terms')
+            rms = np.sqrt(np.mean((z-zcos)**2))
+            print('rms difference between z and zcos=',rms)
+                  
+        DMOD=25.0+5.0*np.log10(cosmo.luminosity_distance(zcos).value)  
+        ABSMAG=appmag-DMOD-kcorr_r.k(z,rest_GMR)+Qevol*(zcos-0.1)
+        return ABSMAG
+    
 def pc10(x):  #returns 10th percentile (for use in binned_statistics)
     pc10=np.percentile(x,10.0)
     return pc10
@@ -174,7 +189,7 @@ def construct_colour_table(fsf, reg, plot=True):
               fsf['ABSMAG_SDSS_R_SAM'] = -99.9 # create an array to store the assigned absolute magnitudes
               rmask = (fsf['PHOTSYS'] == reg)
               Qzero = 0.0 # no evolution correction to be consistent with John
-              fsf['ABSMAG_SDSS_R_SAM'][rmask]=ca.ABSMAG(fsf['RMAG_DRED'][rmask],fsf['Z'][rmask],fsf['REST_GMR_0P1'][rmask],kcorr_r,Qzero)
+              fsf['ABSMAG_SDSS_R_SAM'][rmask]=ABSMAG(fsf['RMAG_DRED'][rmask],fsf['Z'][rmask],fsf['REST_GMR_0P1'][rmask],kcorr_r,Qzero)
 
               diff = fsf['ABSMAG_SDSS_R_SAM'][rmask]-fsf['ABSMAG01_SDSS_R'][rmask]
               bin_medians, bin_edges, binnumber = stats.binned_statistic(fsf['Z'][rmask], diff, statistic='median', bins=25)
@@ -438,11 +453,6 @@ def gen_kcorr(fsf, regions, colval='REST_GMR_0P1', nbins=10, write=False, rollin
     #plt.show()
     
     return all_bins, all_medians 
-
-    import numpy as np
-import matplotlib.pyplot as plt
-from   scipy.interpolate import interp1d
-from   pkg_resources     import resource_filename
 
 
 
