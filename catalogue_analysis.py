@@ -122,26 +122,29 @@ def CheckParametersMatch():
     
         
     
-# load in catalogues
-def Y3load_catalogues(fpath):
+# load in chosen columns from random catalogues
+def Y3load_catalogues(fpath,columns=None):
     """Load the Y3 LSS catalogue"""
-    dat = Table.read(fpath)
-    # Copy of PHOTSYS which is N/S to the "reg" column this code uses
-    dat.add_column(Column(name='reg', data=dat['PHOTSYS']))
+    # to get orginal behaviour set columns=None
+    if (columns == None):
+        dat = Table.read(fpath)
+    else:    
+        dat = Table.read(fpath)[columns]
+        
+    # Rename column PHOTSYS which is N/S to the "reg" column this code uses
+    dat.rename_column('PHOTSYS', 'reg')
 
-    # Place holders for addtional quantitites that will be calculated 
-    dat.add_column(Column(name='REST_GMR_0P1', data=np.zeros(dat['Z'].size)))  #place holder into which to load colours
-    dat.add_column(Column(name='ijack', data=np.zeros(dat['Z'].size, dtype=int)))
-    
-
-    #Apparent magnitudes avoiding infinities where fluxes are 0 or negative
-    dat.add_column(Column(name='gmag', data=22.5-2.5*np.log10(np.clip(dat['flux_g_dered'],1.0e-10,None)) ))
-    dat.add_column(Column(name='rmag', data=22.5-2.5*np.log10(dat['flux_r_dered']) ))
-    dat.add_column(Column(name='zmag', data=22.5-2.5*np.log10(np.clip(dat['flux_z_dered'],1.0e-10,None)) ))
-    dat.add_column(Column(name='w1mag', data=22.5-2.5*np.log10(np.clip(dat['flux_w1_dered'],1.0e-10,None)) ))
-
-    #Add Observerframe colour 
-    dat.add_column(Column(name='gmr_obs', data=dat['gmag']-dat['rmag']))
+    # If requeseted Place holders for addtional quantitites that will be calculated 
+    if (columns== None): 
+        dat.add_column(Column(name='REST_GMR_0P1', data=np.zeros(dat['RA'].size)))  #place holder into which to load colours
+        dat.add_column(Column(name='ijack', data=np.zeros(dat['RA'].size, dtype=int)))
+        #If requested apparent magnitudes avoiding infinities where fluxes are 0 or negative
+        dat.add_column(Column(name='gmag', data=22.5-2.5*np.log10(np.clip(dat['flux_g_dered'],1.0e-10,None)) ))
+        dat.add_column(Column(name='rmag', data=22.5-2.5*np.log10(dat['flux_r_dered']) ))
+        dat.add_column(Column(name='zmag', data=22.5-2.5*np.log10(np.clip(dat['flux_z_dered'],1.0e-10,None)) ))
+        dat.add_column(Column(name='w1mag', data=22.5-2.5*np.log10(np.clip(dat['flux_w1_dered'],1.0e-10,None)) ))
+        #and Observerframe colour 
+        dat.add_column(Column(name='gmr_obs', data=dat['gmag']-dat['rmag']))
 
 
     return dat
@@ -666,15 +669,19 @@ def col_limit(z, Mr, kcorr_r, cmin=0.0, cmax=1.5, mlim=19.5):
     # Fallback (should not occur)
     return np.nan
 # Make plots of the k-corrections to check they are sensible and smooth in both redshift and colour
-def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True, forceN=False):
+def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True, forceN=False, R_only=False):
     """Assign restframe colours from g-r vs redshift lookup table and ABSMAG using k-correction polynomials"""
 
     if "ABSMAG_RP1" not in dat.colnames:
-        dat.add_column(Column(name='ABSMAG_W1P1', data=np.zeros(dat['Z'].size)))#place holder into which to load absolute mags
-        dat.add_column(Column(name='ABSMAG_ZP1', data=np.zeros(dat['Z'].size))) #place holder into which to load absolute mags
-        dat.add_column(Column(name='ABSMAG_GP1', data=np.zeros(dat['Z'].size))) #place holder into which to load absolute mags
-        dat.add_column(Column(name='ABSMAG_GP1_gk', data=np.zeros(dat['Z'].size))) #place holder into which to load absolute mags
-        dat.add_column(Column(name='ABSMAG_RP1', data=np.zeros(dat['Z'].size))) #place holder into which to load absolute mags
+        if R_only:
+            dat.add_column(Column(name='ABSMAG_RP1', data=np.zeros(dat['Z'].size))) #place holder into which to load absolute mags
+        else:    
+            dat.add_column(Column(name='ABSMAG_RP1', data=np.zeros(dat['Z'].size))) #place holder into which to load absolute mags
+            dat.add_column(Column(name='ABSMAG_W1P1', data=np.zeros(dat['Z'].size)))#place holder into which to load absolute mags
+            dat.add_column(Column(name='ABSMAG_ZP1', data=np.zeros(dat['Z'].size))) #place holder into which to load absolute mags
+            dat.add_column(Column(name='ABSMAG_GP1', data=np.zeros(dat['Z'].size))) #place holder into which to load absolute mags
+            dat.add_column(Column(name='ABSMAG_GP1_gk', data=np.zeros(dat['Z'].size))) #place holder into which to load absolute mags
+        
     
     for reg in regions:
       if forceN: 
@@ -694,26 +701,31 @@ def recompute_rest_col_mag(dat,regions, fsf, fresh=False, plot=True, forceN=Fals
       # call to use the lookup table to assign rest-frame colours  
       k.colour_table_lookup(dat, regmask, lookupreg, replot=plot, fresh=False)     
 
-      # call to assign k-corrected magnitudes in the W1-band  
-      kcorr_rM  = DESI_KCorrection(band='W1', file='jmext', photsys=lookupreg) #set k-correction for region
-      dat['ABSMAG_W1P1'][regmask]=k.ABSMAG(dat['w1mag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qw1'],zcos=dat['Zcos'][regmask])
-      
-      # call to assign k-corrected magnitudes in the z-band
-      kcorr_rM  = DESI_KCorrection(band='Z', file='jmext', photsys=lookupreg) #set k-correction for region
-      dat['ABSMAG_ZP1'][regmask]=k.ABSMAG(dat['zmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qz'],zcos=dat['Zcos'][regmask])  
-
-      # call to assign k-corrected magnitudes in the r-band  
-      kcorr_rM  = DESI_KCorrection(band='R', file='jmext', photsys=lookupreg) #set k-correction for region
-      dat['ABSMAG_RP1'][regmask]=k.ABSMAG(dat['rmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qevol'],zcos=dat['Zcos'][regmask])
-
-      # call to assign k-corrected magnitudes in the g-band
-      kcorr_rM  = DESI_KCorrection(band='G', file='jmext', photsys=lookupreg) #set k-correction for region
-      dat['ABSMAG_GP1_gk'][regmask]=k.ABSMAG(dat['gmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qg'],zcos=dat['Zcos'][regmask])
-      dat["ABSMAG_GP1"][regmask]=dat["ABSMAG_RP1"][regmask]+dat["REST_GMR_0P1"][regmask] + (Sel['Qg']-Sel['Qevol'])*(dat['Z'][regmask]-0.1)
-        
-      #Following Call is probably not needed but resets kcorr_rM t the r band as it was before this code computed g, z, and w1 absolute magnitudes
-      kcorr_rM  = DESI_KCorrection(band='R', file='jmext', photsys=lookupreg) #set k-correction for region
+      if R_only:
+           # call to assign k-corrected magnitudes in the r-band  
+          kcorr_rM  = DESI_KCorrection(band='R', file='jmext', photsys=lookupreg) #set k-correction for region
+          dat['ABSMAG_RP1'][regmask]=k.ABSMAG(dat['rmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qevol'],zcos=dat['Zcos'][regmask])
+      else:    
+          # call to assign k-corrected magnitudes in the W1-band  
+          kcorr_rM  = DESI_KCorrection(band='W1', file='jmext', photsys=lookupreg) #set k-correction for region
+          dat['ABSMAG_W1P1'][regmask]=k.ABSMAG(dat['w1mag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qw1'],zcos=dat['Zcos'][regmask])
+          
+          # call to assign k-corrected magnitudes in the z-band
+          kcorr_rM  = DESI_KCorrection(band='Z', file='jmext', photsys=lookupreg) #set k-correction for region
+          dat['ABSMAG_ZP1'][regmask]=k.ABSMAG(dat['zmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qz'],zcos=dat['Zcos'][regmask])  
     
+          # call to assign k-corrected magnitudes in the r-band  
+          kcorr_rM  = DESI_KCorrection(band='R', file='jmext', photsys=lookupreg) #set k-correction for region
+          dat['ABSMAG_RP1'][regmask]=k.ABSMAG(dat['rmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qevol'],zcos=dat['Zcos'][regmask])
+    
+          # call to assign k-corrected magnitudes in the g-band
+          kcorr_rM  = DESI_KCorrection(band='G', file='jmext', photsys=lookupreg) #set k-correction for region
+          dat['ABSMAG_GP1_gk'][regmask]=k.ABSMAG(dat['gmag'][regmask],dat['Z'][regmask],dat['REST_GMR_0P1'][regmask],kcorr_rM,Sel['Qg'],zcos=dat['Zcos'][regmask])
+          dat["ABSMAG_GP1"][regmask]=dat["ABSMAG_RP1"][regmask]+dat["REST_GMR_0P1"][regmask] + (Sel['Qg']-Sel['Qevol'])*(dat['Z'][regmask]-0.1)
+            
+          #Following Call is probably not needed but resets kcorr_rM t the r band as it was before this code computed g, z, and w1 absolute magnitudes
+          kcorr_rM  = DESI_KCorrection(band='R', file='jmext', photsys=lookupreg) #set k-correction for region
+        
 
 
     return
@@ -824,71 +836,160 @@ def compute_zmax(dat,regions,forceN=False):
     del regmask,zmin,zmax  #tidy up  
     return
 
-#Compute v, vmin and vmax variables from the z, zmin and zmax and the area of the corresponding region.
-# optionally if zsplit>0 split the sample at this redshift and set vmin and vmax according to which sample the galaxy lies
-#Also optionally if dz>0 additionally define windowed zwinmin, zwinmax and corresponding vminmin, ,vwin, vwinmax used in defining veff and random catalogues
-def add_vminvmax(dat,regions, zsplit=0.0, dz=0, silent=False):
-    #If selected defined the windowed zwinmin, zwinmax and corresponding volume coordinates
-    if (dz>0) :
-        dat['zwinmin'] = np.clip(dat['zmin'], a_min=dat['Z']-dz, a_max=np.inf)
-        dat['zwinmax'] = np.clip(dat['zmax'], a_min=-np.inf, a_max=dat['Z']+dz)
-        vmax=np.zeros(dat['Z'].size) # set up array ready to receive vmax values
-        vmin=np.zeros(dat['Z'].size) # set up array ready to receive vmin values
-        v=np.zeros(dat['Z'].size) # v values
+#Sets up interpolated functions that return the volume within z for the specified region 
+#its inverse function z_of_vol and also distance modulus as a function of redshift
+#    
+# Direct cosmological calculations (comoving distance, luminosity distance) are
+# expensive when called on arrays of millions of points. Instead we compute each
+# quantity once on a fine redshift grid and use np.interp for all subsequent
+# lookups. With 10000 grid points over 0 < z < 1 the interpolation error is
+# negligible for BGS redshifts.    
+def make_vol_interp(reg):
+    """Return vol_of_z and z_of_vol interpolation functions for the given region."""
+    Sel = selection(reg)
+    # Redshift grid. Starts at 0.0001 rather than 0.0 to avoid log10(0) = -inf
+    # in the distance modulus calculation. No BGS galaxy has z < 0.001 so this
+    # is safe. The grid extends to z=1.0, well beyond the BGS limit of z~0.5.
+    zgrid   = np.linspace(0.0001, 1.0, 10000)
+    
+    # Cumulative comoving volume as a function of redshift.
+    # vol = fsky * (4pi/3) * D_C^3(z), where D_C is the comoving distance in Mpc/h.
+    volgrid = Sel['area'] * (4*np.pi/3) * cosmo.comoving_distance(zgrid).value**3
+    
+    def vol_of_z(z):
+        """Convert redshift to cumulative comoving volume (Mpc/h)^3."""
+        return np.interp(z, zgrid, volgrid)
+    
+    def z_of_vol(vol):
+        """Convert cumulative comoving volume (Mpc/h)^3 to redshift."""
+        return np.interp(vol, volgrid, zgrid)
+
+    # Note: dmod_of_z does not depend on the region sky area and would give
+    # identical results for any region. It is included here for convenience
+    # so that callers need only make one call to obtain all three functions.
+    dmod_grid = 25.0 + 5.0*np.log10(cosmo.luminosity_distance(zgrid).value)
+
+    def dmod_of_z(z):
+        """Convert redshift to distance modulus."""
+        return np.interp(z, zgrid, dmod_grid)
+    
+    return vol_of_z, z_of_vol, dmod_of_z
+
+
+
+def add_vminvmax(dat, regions, zsplit=0.0, dz=0, silent=False):
+    """
+    Compute galaxy-relative volume coordinates v, vmin and vmax from redshifts
+    and add them as columns to dat.
+
+    The volume coordinate is the cumulative comoving volume
+    vol = fsky * (4pi/3) * D_C^3(z), where fsky is the sky area of the region.
+    The galaxy-relative coordinate v = vol(Z) - vmin runs from 0 to vmax,
+    where vmin = vol(zmin) and vmax = vol(zmax) - vmin.
+
+    Optionally, a DeltaZ-windowed set of coordinates (vwin, vwinmin, vwinmax)
+    can be computed by passing dz>0. These restrict each galaxy's visibility
+    window to within dz of its observed redshift, and are used when constructing
+    random catalogues.
+
+    Optionally, the sample can be split at zsplit into two redshift bins, with
+    vmax clipped at the split redshift for galaxies below it and vmin clipped
+    for galaxies above it. This is used when computing clustering statistics
+    in separate redshift bins.
+
+    Parameters
+    ----------
+    dat : astropy Table
+        Galaxy catalogue with columns Z, zmin, zmax and reg.
+        Volume coordinate columns are added or overwritten in place.
+    regions : str or sequence of str
+        Survey region(s) to process (e.g. 'N' or 'S').
+    zsplit : float, optional
+        If > 0, split the sample into two redshift bins at this redshift.
+        Default is 0.0 (no split).
+    dz : float, optional
+        If > 0, also compute DeltaZ-windowed volume coordinates vwin, vwinmin,
+        vwinmax with each galaxy's visibility window clipped to within dz of
+        its observed redshift. Default is 0 (no windowing).
+    silent : bool, optional
+        If True, suppress progress messages. Default is False.
+    """
+
+    # If dz>0, compute DeltaZ-windowed visibility limits and corresponding
+    # volume coordinates. These are stored as vwin, vwinmin, vwinmax and are
+    # used in random_catalogue() to restrict clone redshift displacements.
+    if dz > 0:
+        dat['zwinmin'] = np.clip(dat['zmin'], a_min=dat['Z'] - dz, a_max=np.inf)
+        dat['zwinmax'] = np.clip(dat['zmax'], a_min=-np.inf,        a_max=dat['Z'] + dz)
+        vmax = np.zeros(dat['Z'].size)
+        vmin = np.zeros(dat['Z'].size)
+        v    = np.zeros(dat['Z'].size)
         for reg in regions:
-            if ~silent: print('For redshift windows: starting region ',reg)
-            Sel=selection(reg) # define selection
-            regmask=(dat['reg']==reg)#mask to select objects in specified region
-            vmin[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zwinmin'][regmask]).value)**3 
-            v[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['Z'][regmask]).value)**3 - vmin[regmask]
-            vmax[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zwinmax'][regmask]).value)**3  - vmin[regmask]
-        if 'vwin' in dat.colnames:  
-            dat.replace_column('vwin',Column(name='vwin', data=v))
-            dat.replace_column('vwinmax',Column(name='vwinmax', data=vmax))
-            dat.replace_column('vwinmin',Column(name='vwinmin', data=vmin))
+            vol_of_z, _, _ = make_vol_interp(reg)
+            if not silent: print('For redshift windows: starting region', reg)
+            regmask       = (dat['reg'] == reg)
+            vmin[regmask] = vol_of_z(dat['zwinmin'][regmask])
+            v[regmask]    = vol_of_z(dat['Z'][regmask])       - vmin[regmask]
+            vmax[regmask] = vol_of_z(dat['zwinmax'][regmask]) - vmin[regmask]
+        if 'vwin' in dat.colnames:
+            dat.replace_column('vwin',    Column(name='vwin',    data=v))
+            dat.replace_column('vwinmax', Column(name='vwinmax', data=vmax))
+            dat.replace_column('vwinmin', Column(name='vwinmin', data=vmin))
         else:
-            dat.add_column(Column(name='vwin', data=v))
+            dat.add_column(Column(name='vwin',    data=v))
             dat.add_column(Column(name='vwinmax', data=vmax))
             dat.add_column(Column(name='vwinmin', data=vmin))
 
-
-    #Define the standard volume coordinates
-    vmax=np.zeros(dat['Z'].size) # set up array ready to receive vmax values
-    vmin=np.zeros(dat['Z'].size) # set up array ready to receive vmin values
-    v=np.zeros(dat['Z'].size) # v values
+    # Compute the standard volume coordinates from the full visibility limits
+    # zmin and zmax. These are always computed regardless of dz or zsplit.
+    vmax = np.zeros(dat['Z'].size)
+    vmin = np.zeros(dat['Z'].size)
+    v    = np.zeros(dat['Z'].size)
     for reg in regions:
-        if not silent: print('starting region ',reg)
-        Sel=selection(reg) # define selection
-        regmask=(dat['reg']==reg)#mask to select objects in specified region
-        vmin[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zmin'][regmask]).value)**3 
-        v[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['Z'][regmask]).value)**3 - vmin[regmask]
-        vmax[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zmax'][regmask]).value)**3  - vmin[regmask]
-        
-    # If select split sample into two redshift bins at zsplit
-    if (zsplit>0.0):
-     if not silent: print('Splitting the sample into two redshift bins at z_split=',zsplit)   
-     for reg in regions:   
-        if ~silent: print('starting region ',reg)
-        Sel=selection(reg) # define selection
-        regmask=(dat['reg']==reg) & (dat['Z']<=zsplit) #mask to select objects in specified region and z<zsplit
-        vmin[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zmin'][regmask]).value)**3 
-        v[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['Z'][regmask]).value)**3 - vmin[regmask]
-        vmax[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(np.clip(dat['zmax'][regmask],None,zsplit)).value)**3  - vmin[regmask]
-        regmask=(dat['reg']==reg) & (dat['Z']>zsplit) #mask to select objects in specified region and z<zsplit
-        vmin[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(np.clip(dat['zmin'][regmask],zsplit,None)).value)**3 
-        v[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['Z'][regmask]).value)**3 - vmin[regmask]
-        vmax[regmask]=Sel['area']*(4.0*np.pi/3.0)*(cosmo.comoving_distance(dat['zmax'][regmask]).value)**3  - vmin[regmask]
-         
-    # store or overwrite the volume coordinates     
-    if 'v' in dat.colnames:  
-        dat.replace_column('v',Column(name='v', data=v))
-        dat.replace_column('vmax',Column(name='vmax', data=vmax))
-        dat.replace_column('vmin',Column(name='vmin', data=vmin)) 
+        vol_of_z, _, _ = make_vol_interp(reg)
+        if not silent: print('starting region', reg)
+        regmask       = (dat['reg'] == reg)
+        vmin[regmask] = vol_of_z(dat['zmin'][regmask])
+        v[regmask]    = vol_of_z(dat['Z'][regmask])    - vmin[regmask]
+        vmax[regmask] = vol_of_z(dat['zmax'][regmask]) - vmin[regmask]
+
+    # If zsplit>0, overwrite the volume coordinates for each redshift bin
+    # so that vmax is clipped at zsplit for galaxies below the split and
+    # vmin is clipped at zsplit for galaxies above it. This ensures that
+    # galaxies in each bin are only visible within their respective bin.
+    if zsplit > 0.0:
+        if not silent: print('Splitting the sample into two redshift bins at z_split=', zsplit)
+        for reg in regions:
+            vol_of_z, _, _ = make_vol_interp(reg)
+            if not silent: print('starting region', reg)
+
+            # Lower bin: z <= zsplit. vmax is clipped so galaxies cannot
+            # contribute volume above the split redshift.
+            regmask       = (dat['reg'] == reg) & (dat['Z'] <= zsplit)
+            vmin[regmask] = vol_of_z(dat['zmin'][regmask])
+            v[regmask]    = vol_of_z(dat['Z'][regmask])                           - vmin[regmask]
+            vmax[regmask] = vol_of_z(np.clip(dat['zmax'][regmask], None, zsplit)) - vmin[regmask]
+
+            # Upper bin: z > zsplit. vmin is clipped so galaxies cannot
+            # contribute volume below the split redshift.
+            regmask       = (dat['reg'] == reg) & (dat['Z'] > zsplit)
+            vmin[regmask] = vol_of_z(np.clip(dat['zmin'][regmask], zsplit, None))
+            v[regmask]    = vol_of_z(dat['Z'][regmask])                           - vmin[regmask]
+            vmax[regmask] = vol_of_z(dat['zmax'][regmask])                        - vmin[regmask]
+
+    # Store or overwrite the volume coordinate columns in dat.
+    if 'v' in dat.colnames:
+        dat.replace_column('v',    Column(name='v',    data=v))
+        dat.replace_column('vmax', Column(name='vmax', data=vmax))
+        dat.replace_column('vmin', Column(name='vmin', data=vmin))
     else:
-        dat.add_column(Column(name='v', data=v))
+        dat.add_column(Column(name='v',    data=v))
         dat.add_column(Column(name='vmax', data=vmax))
-        dat.add_column(Column(name='vmin', data=vmin)) 
+        dat.add_column(Column(name='vmin', data=vmin))
     return
+    
+
+
     
 def plot_kcorr(regions):
     """plot k-correction polynomials"""

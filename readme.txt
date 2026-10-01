@@ -5,7 +5,8 @@ This is backed up in the following GitHub Repository: git@github.com:ShaunMCole/
 Useful git commnands:
 git status
 git add     # to add files to the list waiting to be comitted
-
+git commit -m "Backup message"
+git push    #to force needs passphrase 
 
 Collections of Python functions:
    catalogue_analysis.py   -- wide collection of python code for analysing galaxy catalogues including estimating luminosity functions
@@ -38,3 +39,11 @@ Data files:
 To access docstrings of all the functions in catalogue_analysis.py in Jupyter Hub do
 import catalogue_analysis.py as ca
 help(ca)
+
+
+
+Direct SHAM mock catalogues
+
+RandomCatalogue.ipynb   -- Produces N and S random catalogues and a combined if both run with same NMULT that contains NGC/SGC column
+MockVpeakZpeak.ipynb    -- Produces N and S mock catalogues separately and correspodning randoms and if S run after north ensures NMULT the same for both
+NGCSGC_split.ipynb   -- code to split BGS catalogue and fordata randoms into NGC/SGC files  and also combine formock randoms into a single table that is then NGC/SGC split 

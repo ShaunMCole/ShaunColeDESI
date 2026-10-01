@@ -9,8 +9,11 @@ import gc
 from astropy.table import Table
 from kcorrections  import DESI_KCorrection
 import catalogue_analysis as ca
+import fitsio
+from desimodel.footprint import is_point_in_desi
+import matplotlib.pyplot as plt
 
-# Add gaussian scatter to log10(Vpeak) before ranking if required 
+# Add gaussian scatter to log10(Vpeak) before ranking if required   
 def apply_log_scatter(x, sigma):
     """
     Apply log-normal scatter.
@@ -37,18 +40,26 @@ def apply_log_scatter(x, sigma):
 #Generate a random set of Euler angles
 def random_euler_angles(seed=None):
 
-    rng = np.random.default_rng(seed)
+    if (seed==0):
+        #Align with simulation axes
+        phi=0.0
+        theta=0.0
+        psi=0.0
+    else:
+        #Chosen random orientation isotropically
+        rng = np.random.default_rng(seed)
 
-    phi = 2.0 * np.pi * rng.random()
+        phi = 2.0 * np.pi * rng.random()
 
-    costheta = 2.0 * rng.random() - 1.0
-    theta = np.arccos(costheta)
+        costheta = 2.0 * rng.random() - 1.0
+        theta = np.arccos(costheta)
 
-    psi = 2.0 * np.pi * rng.random()
+        psi = 2.0 * np.pi * rng.random()
 
     return phi, theta, psi
 
 #Compute the rotation matrix descrbed by a set of Euler angles
+#(For phi,theta,psi= (0,0,0) this is just the identity matrix)   
 def euler_rotation_matrix(phi, theta, psi):
 
     c1 = np.cos(phi)
@@ -370,7 +381,7 @@ def compute_frac_local(z, N_neigh):
 # ii) Compute fraction of neighbours with higher zpeak
 #iii) Add scatter to Vpeak and sort again
 # iv) Trim the catalogue by applying a tailored Vpeak(z) threshold
-def pre_sort_subhalos(subhalos,N_neigh=100,sig_lgv=0.0):
+def pre_sort_subhalos(subhalos,N_neigh=100,sig_lgv=0.0,plot=False):
     
     start_time = time.time()
     print("Starting sort")
@@ -406,10 +417,21 @@ def pre_sort_subhalos(subhalos,N_neigh=100,sig_lgv=0.0):
     if (sig_lgv>0.0):
         #Add scatter to Vpeak
         start_time = time.time()
+        # Capture before/after (insert BEFORE the scatter line)
+        if plot:
+            # Sample a small fraction BEFORE copying anything
+            nsub = len(subhalos)
+            sample_frac = 0.02  # 2% — adjust as needed
+            idx = np.random.choice(nsub, size=int(nsub * sample_frac), replace=False)
+            vpeak_old = subhalos['Vpeak'][idx].copy()  # small sampled copy only
+            log_mpeak_s = np.log10(subhalos['Mvir_all'][idx])  # grab Mpeak at same indices
+
         subhalos['Vpeak']=apply_log_scatter(subhalos['Vpeak'], sig_lgv)
+        if plot:
+            vpeak_new = subhalos['Vpeak'][idx].copy()  # grab sample BEFORE sort
+
         end_time = time.time()
         print(f"time to add Vpeak scatter: {end_time - start_time:.4f} seconds")
-
         start_time = time.time()
         print("Starting 2nd sort")
         subhalos.sort('Vpeak')
@@ -418,10 +440,60 @@ def pre_sort_subhalos(subhalos,N_neigh=100,sig_lgv=0.0):
         print("Reversal complete")
         end_time = time.time()
         print(f"time to sort subhalos: {end_time - start_time:.4f} seconds")
+        if plot:
+           
+            log_old = np.log10(vpeak_old)
+            log_new = np.log10(vpeak_new)
+            delta   = log_new - log_old
+        
+            fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        
+            ax = axes[0]
+            ax.scatter(log_old, log_new, s=1.0, alpha=0.3, rasterized=True)
+            lims = [log_old.min(), log_old.max()]
+            ax.plot(lims, lims, 'r--', lw=1, label='1:1')
+            ax.set_xlabel(r'$\log_{10}(V_\mathrm{peak,\,old})$')
+            ax.set_ylabel(r'$\log_{10}(V_\mathrm{peak,\,new})$')
+            ax.set_title(rf'$\sigma_{{lgv}}={sig_lgv}$ (2% sample)')
+            ax.legend()
+        
+            ax = axes[1]
+            ax.hist(delta, bins=200, density=True, histtype='step', color='steelblue')
+            mu, std = delta.mean(), delta.std()
+            x = np.linspace(delta.min(), delta.max(), 300)
+            ax.plot(x, np.exp(-0.5*((x-mu)/std)**2) / (std*np.sqrt(2*np.pi)),
+                    'r-', lw=1.5, label=rf'Gaussian fit: $\sigma={std:.4f}$')
+            ax.set_xlabel(r'$\Delta\log_{10}(V_\mathrm{peak})$')
+            ax.set_ylabel('Density')
+            ax.set_title(rf'Measured scatter: $\sigma={std:.4f}$,  $\mu={mu:.4f}$')
+            ax.legend()
+        
+            fig.tight_layout()
+            plt.savefig('vpeak_scatter_check.png', dpi=150)
+            plt.show()
+            print(f"Measured log10 scatter: sigma={std:.4f}, mu={mu:.4f}")
+        
+            fig, ax = plt.subplots(figsize=(7, 6))
+            ax.scatter(log_mpeak_s, log_old, s=1.0, alpha=0.3, rasterized=True)
+            ax.set_xlabel(r'$\log_{10}(M_\mathrm{peak})$')
+            ax.set_ylabel(r'$\log_{10}(V_\mathrm{peak,\,old})$')
+            ax.set_title(r'$V_\mathrm{peak}$ vs $M_\mathrm{peak}$ (2% sample)')
+            fig.tight_layout()
+            plt.savefig('vpeak_vs_mpeak.png', dpi=150)
+            plt.show()
 
+    
     # Rank index
     start_time = time.time()
+    #First check if int32 is sufficient to rank all the subhalos
+    if nsub > np.iinfo(np.int32).max:
+            raise RuntimeError(
+            f"{nsub=} exceeds int32 limit "
+            f"{np.iinfo(np.int32).max}"
+        )
     subhalos['i1'] = np.arange(1, nsub + 1, dtype=np.int32)
+    print('These numbers should be the same if ranking done as expected. nsub=',len(subhalos),'?=?',np.max(subhalos["i1"]))
+    print('and  1 ?=?', np.min(subhalos["i1"]))
     end_time = time.time()
     print(f"time to define rank index: {end_time - start_time:.4f} seconds")
     
@@ -471,16 +543,22 @@ def abundance_match_subhalos_to_randoms(
     lbox,
     rsphere,
     fsky,
+    nmult,
     z_bins,
     scatter_sigma=None,
     DeltaZ=0.03,
     reg=None,
-    N_neigh=50
+    N_neigh=50,
+    Rejection=False
 ):
     """
     NumPy-based abundance matching with minimal memory overhead.
     """
     kcorr_r  = DESI_KCorrection(band='R', file='jmext', photsys=reg) 
+    Ntot_expected = 0.0
+    Ntot_actual = 0
+    Ntot_ran_vis = 0.0
+    print(rf"fsky={fsky}  ")
     # ------------------------------------------------------------
     # Extract NumPy arrays (no copies yet)
     # ------------------------------------------------------------
@@ -513,7 +591,10 @@ def abundance_match_subhalos_to_randoms(
 
     # Get global zmin of the catalogue
     Sel=ca.selection(reg)
-    zmin_cat=Sel['zmin']
+    zmin_cat=Sel['zmin']  #but this is already z_bins[0]
+
+    V_sim = (4.0*np.pi/3.0)* (rsphere**3)  #Volume cut from simulation box within which ranking was performed. Needed for scaling.
+    print('Global subhalo density in full sphere: ',len(subhalos)/V_sim)
 
     # ------------------------------------------------------------
     # Output containers (column-wise, memory-efficient)
@@ -521,19 +602,64 @@ def abundance_match_subhalos_to_randoms(
     out_sub = []
     out_gal = []
 
-    V_sim = (4.0*np.pi/3.0)* (rsphere**3)  #Volume cut from simulatin box within which ranking was performed. Needed for scaling.
+    #Set up Table of diagnostics
+    diagnostics = Table(
+        names=(
+        'zmin',
+        'zmax',
+        'Nsubs',
+        'Nran_shell',
+        'Nran_slice',
+        'Nran_vis_slice',
+        'Nactual',
+        'Nexpected',
+        'ratio_actual_expected',
+        'ratio_vis_actual',
+        'R',
+        'frac_rejected',
+        'V_shell',
+        'V_slice'    
+        ),
+        dtype=(
+        float, float,
+        int, int, int, int,
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float
+        )
+    )
 
+    diagnostics.meta['FSKY'] = fsky
+    diagnostics.meta['NMULT'] = nmult
+    diagnostics.meta['DELTAZ'] = DeltaZ
+    diagnostics.meta['VSIM'] = V_sim
+    
+
+    
     # ------------------------------------------------------------
     # Loop over redshift slices
     # ------------------------------------------------------------
     for zmin, zmax in zip(z_bins[:-1], z_bins[1:]):
+
+       
 
         zmin_ex=np.maximum(zmin_cat,zmax-DeltaZ) # The lower redshift of the shell of randoms used for finding matches
         # Boolean masks (cheap views)
         #   All sub haloes in he narrow slice we are populating
         sub_m = (sub_z >= zmin) & (sub_z < zmax)
         #   All randoms in the wider shell that would be in the catalogue if moved to zmax of the slice
-        ran_m = (ran_z >= zmin_ex) & (ran_z < zmax) & (ran_zmax>=zmax)
+        if Rejection: #keep all galaxies that might be visible at some point in the slice (and later reject those that aren't visible at their assigned redhsift)
+            ran_m = (ran_z >= zmin_ex) & (ran_z < zmax) & (ran_zmax>=zmin)
+        else: #only keep galaxies visible throughout the slice
+            ran_m = (ran_z >= zmin_ex) & (ran_z < zmax) & (ran_zmax>=zmax)
+
+        Nran_slice=np.count_nonzero((ran_z >= zmin) & (ran_z < zmax)) #used to determine the random count to get a 2nd check on the normalization
+        Nran_vis_slice=np.count_nonzero((ran_z >= zmin) & (ran_z < zmax) & (ran_zmax >= zmax))
         
        
         if not sub_m.any() or not ran_m.any(): #If nothing in one or other slice move to next slice
@@ -542,30 +668,99 @@ def abundance_match_subhalos_to_randoms(
         # Indices
         sub_idx = np.nonzero(sub_m)[0] #returns as a numpy array the indices of the subhaloes in the redshift slice i.e. for which the mask is True
         ran_idx = np.nonzero(ran_m)[0] #returns as a numpy array the indices of the random galaxies in the redshift slice i.e. for which the mask is True
+        Nran=len(ran_idx) #number of random galaxies in the shell
 
+        # volume of the slice we are populating
+        V_slice = fsky * (4.0*np.pi/3.0)*( (ca.cosmo.comoving_distance(zmax).value)**3 -(ca.cosmo.comoving_distance(zmin).value)**3  ) 
         # volume of shell in random catalogue
-        V_slice = fsky * (4.0*np.pi/3.0)*( (ca.cosmo.comoving_distance(zmax).value)**3 -(ca.cosmo.comoving_distance(zmin_ex).value)**3  ) 
+        V_shell = fsky* nmult * (4.0*np.pi/3.0)*( (ca.cosmo.comoving_distance(zmax).value)**3 -(ca.cosmo.comoving_distance(zmin_ex).value)**3  ) 
         # volume ratio needed for scaling when making matches (so that we are matching in number density)
-        R = V_sim / V_slice 
+        R = V_sim / V_shell 
 
-        print("Processing slice:",zmin,"<z<",zmax,"Nsubs=",sub_m.sum(),"Nrans=",ran_m.sum(),' R=',R)
+        ## Diagnostic to check that on average we match the expected number of galaxies
+        Nexpected_slice = V_slice*(Nran/V_shell)
+        Ntot_expected += Nexpected_slice
+        Ntot_ran_vis += Nran_vis_slice / nmult
+        ##
+        
+        
 
         # ------------------------------------------------------------
         # Pure luminosity SHAM mapping
         # ------------------------------------------------------------
         target_rank = np.rint(i1[sub_idx] / R).astype(np.int64) - 1
-
-        valid = (target_rank >= 0) & (target_rank < len(ran_idx))
-
+        
+        
+        # objects that can actually be matched
+        valid = (target_rank >= 0) & (target_rank < Nran)
+        
+        
         if not np.any(valid):
             continue
-
+        
         sub_idx_valid = sub_idx[valid]
         match_local = target_rank[valid]
 
+        if Rejection:
+            matched_local = match_local.copy()
+            sub_z_match = sub_z[sub_idx_valid] #redshifts of the matched subhalos
+            matched_zmax = ran_zmax[ran_idx[matched_local]] #zmax values of the corresponding random galaxies
 
+            good = matched_zmax >= sub_z_match #only keep those that would be visible at their assigned redshift
+            print("Tested=", len(good),"Matched=", np.sum(good),"Rejected=", np.sum(~good),"Frac rejected=", np.mean(~good))
 
-#  code to do secondary matching
+            sub_idx_valid = sub_idx_valid[good] #update the matches to keep only the good ones
+            match_local = matched_local[good]
+            frac_rejected = np.mean(~good)
+        else:
+            frac_rejected = 0.0
+
+               
+        #compute diagnostics
+        Nactual_slice=len(sub_idx_valid)
+   
+
+        ratio_actual_expected = (
+            Nactual_slice / Nexpected_slice
+            if Nexpected_slice > 0 else np.nan
+        )
+
+        ratio_vis_actual = (
+            (Nran_vis_slice / nmult) / Nactual_slice
+            if Nactual_slice > 0 else np.nan
+        )
+
+        
+
+        
+       
+        Ntot_actual += Nactual_slice
+        Nsubs_shell=sub_m.sum()
+        diagnostics.add_row(
+            (
+                zmin,
+                zmax,
+                Nsubs_shell,
+                Nran,
+                Nran_slice,
+                Nran_vis_slice,
+                Nactual_slice,
+                Nexpected_slice,
+                ratio_actual_expected,
+                ratio_vis_actual,
+                R,
+                frac_rejected,
+                V_shell,
+                V_slice
+            )
+        )
+                
+        if Nactual_slice > 0: print("Visible/Mock ratio =",(Nran_vis_slice / nmult) / Nactual_slice)
+        if (Nactual_slice==Nsubs_shell): print('**WARNING: Subhalo density is insufficient to match the faintest galaxies in the shell resulting Ratio<1.')
+        print(rf"Processing slice:{zmin:.3f}<z<{zmax:.3f} Nsubs={Nsubs_shell} Nrans={Nran} R={R:.2f} Nactual={Nactual_slice} Nexp={Nexpected_slice:.2f}  Ratio={(Nactual_slice/Nexpected_slice):.2f} nden_sub={(Nsubs_shell/V_slice):.5f} nden_gal={(Nran/V_shell):.6f} Nran_slice/nmult={(Nran_slice/nmult):.2f} Nran_vis_slice/nmult={(Nran_vis_slice/nmult):.2f}")
+
+        
+        #  code to do secondary matching
 
         rng = np.random.default_rng()
         f_test = rng.random(len(sub_idx_valid))
@@ -612,67 +807,114 @@ def abundance_match_subhalos_to_randoms(
         out_sub.extend(sub_id[sub_idx_valid])
         out_gal.extend(matched_gal_ids)
 
-       
+    ##   
+    print()
+    print("="*80)
+    print("FINAL SUMMARY")
+    print("="*80)
+    print(f"Matched subhalos = {len(out_sub)}")
+    print(f"Matched galaxies = {len(out_gal)}")
+    print("=")
+    print()
+    print("Expected from shell abundances =", Ntot_expected)
+    print("Actually matched              =", Ntot_actual)
+    print("Ratio                         =", Ntot_actual/Ntot_expected)
+    print("Sum visible randoms =", Ntot_ran_vis)
+    print("Matched galaxies    =", Ntot_actual)
+    print("Ratio               =", Ntot_actual/Ntot_ran_vis)
 
 
+    #Save diagnostics to table from which we will make diagnostic plots
+    diagnostics.meta['N_MATCHED'] = len(out_sub)
+    diagnostics.meta['N_EXPECTED'] = Ntot_expected
+    diagnostics.meta['N_VIS_TOTAL'] = Ntot_ran_vis
+    diagnostics.write('./sdata/Mocks/diagnostics.fits',overwrite=True)
+    ##
     # ------------------------------------------------------------
     # When all slices are processed return the complete matched list
     # as two corresponding numpy arrays
     # ------------------------------------------------------------
-    return np.asarray(out_sub), np.asarray(out_gal)
-
-
-# Generate random RA and DEC keeping the first nr in the mask
-def generate_randoms_in_mask(nr,reg):
-
-
-    tiles = fitsio.read(tiles_file) #read the official tiles/mask file
+    return np.asarray(out_sub),np.asarray(out_gal)
+       
     
-
-    rng = np.random.default_rng()
-
-    ra_chunks = []
-    dec_chunks = []
-
-    nacc = 0
-
-    while nacc < nr:
-
-        # estimate how many more points we need
-        nneed = nr - nacc
-
-        # oversample generously to reduce iterations
-        ntry = max(100000, int(2.0 * nneed))
-
-        ra = 360.0 * rng.random(ntry)
-
-        sindec = -1.0 +2.0*rng.random(ntry)          
-
-        dec = np.degrees(np.arcsin(sindec))
-
-        if (reg=='N'):
-            mask = is_point_in_desi(tiles, ra, dec) # in whole of official DESI DR2 mask
-            mask = mask & (ra>85.0) & (ra<305.0) &  (dec>32.375) #cut to portion in region North
-        else:    
-            mask = (ra>85.0) & (ra<305.0) &  (dec>32.375) # region that includes DESI North and none of DESI South
-            mask = ~mask & is_point_in_desi(tiles, ra, dec) # in whole of official DESI DR2 mask but with ~mask excludes the North
     
-
-        ra_keep = ra[mask]
-        dec_keep = dec[mask]
-
-        ra_chunks.append(ra_keep)
-        dec_chunks.append(dec_keep)
-
-        nacc += len(ra_keep)
-
-        print(
-            f"Accepted {nacc:,}/{nr:,}",
-            end="\r"
-        )
-
-    ra_out = np.concatenate(ra_chunks)[:nr]
-    dec_out = np.concatenate(dec_chunks)[:nr]
+ 
+  
 
 
+
+
+
+
+
+# Returns the fraction of sky in a defined mask and optionally a set of random RAs and DECs within it
+def generate_randoms_in_mask(usemask=True,fsky_only=False,nr=10_000_000,tiles_file=None,reg=None,RAmin=None,RAmax=None,DECmin=None,DECmax=None):
+
+    if usemask:
+        tiles = fitsio.read(tiles_file) #read the official tiles/mask file
+        rng = np.random.default_rng()
+
+        ra_chunks = []
+        dec_chunks = []
+
+        nacc = 0
+        ntried = 0
+
+        while nacc < nr:
+
+            # estimate how many more points we need
+            nneed = nr - nacc
+
+            # sample until correct number successful
+            #ntry = max(100000, int(2.0 * nneed))
+            ntry=500000
+            ntried += ntry  #keep track of many randoms tried
     
+            ra = 360.0 * rng.random(ntry)
+    
+            sindec = -1.0 +2.0*rng.random(ntry)          
+    
+            dec = np.degrees(np.arcsin(sindec))
+    
+            if (reg=='N'):
+                mask = is_point_in_desi(tiles, ra, dec) # in whole of official DESI DR2 mask
+                mask = mask & (ra>85.0) & (ra<305.0) &  (dec>32.375) #cut to portion in region North
+            elif (reg=='S'):    
+                mask = (ra>85.0) & (ra<305.0) &  (dec>32.375) # region that includes DESI North and none of DESI South
+                mask = ~mask & is_point_in_desi(tiles, ra, dec) # in whole of official DESI DR2 mask but with ~mask excludes the North
+            else:
+                print('Invalid value for reg:',reg)
+        
+    
+            ra_keep = ra[mask]
+            dec_keep = dec[mask]
+    
+            ra_chunks.append(ra_keep)
+            dec_chunks.append(dec_keep)
+    
+            nacc += len(ra_keep)
+            print(f"Accepted {nacc:,}/{nr:,}  fsky={nacc/ntried:.4f}", end="\r")
+    
+        print(f"Accepted {nacc:,}/{nr:,}  fsky={nacc/ntried:.4f}")
+        print('nr=',nr)
+        ra_out = np.concatenate(ra_chunks)[:nr]
+        dec_out = np.concatenate(dec_chunks)[:nr]
+        fsky=nacc/ntried
+        if fsky_only:
+            del ra_out,dec_out
+    else:
+        if ~fsky_only:
+            # Generate RA and DEC that are randomly uniformly distributed within the specified RA and DEC limits
+            rng = np.random.default_rng()
+            ra_out=RAmin+(RAmax-RAmin)*rng.random(nr) #uniform in RA
+            sindecmin= np.sin(np.deg2rad(DECmin))
+            sindecmax= np.sin(np.deg2rad(DECmax))
+            sindec=sindecmin+(sindecmax-sindecmin)*rng.random(nr)
+            dec_out=np.rad2deg(np.arcsin(sindec)) #uniform in sin(DEC) 
+        fsky= (RAmax-RAmin)*(np.pi/180.)*(sindecmax-sindecmin)/(4.0*np.pi)
+
+    # If fsky_only=True, we return just its estimate and no random points within it
+    if fsky_only:
+        return fsky
+    else:    
+        return ra_out,dec_out,fsky
